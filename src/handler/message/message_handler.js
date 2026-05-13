@@ -16,11 +16,19 @@ let raw_msg = null;
 let _bot = null; // 模块级 bot 引用，在 module.exports 中赋值
 
 class chat_msg {
-    constructor(player, message, position, time) {
+    /**
+     * @param {player_info} player - Player info.
+     * @param {string} message - Plain message text.
+     * @param {string} position - Message position.
+     * @param {number} time - Timestamp.
+     * @param {object} [data] - Extra parsed metadata.
+     */
+    constructor(player, message, position, time, data = {}) {
         this.player = player;
         this.message = message;
         this.position = position;
         this.time = time;
+        this.data = data;
     }
 }
 
@@ -245,27 +253,72 @@ function chat_msg_handler(jsonMsg) {//处理方式：提取消息内容（为聊
     return new chat_msg(player, message, position, Date.now());
 }
 
+/**
+ * Parse TPA metadata from click commands and visible text.
+ * @param {string[]} commands - Click commands in the message.
+ * @param {string} plain_text - Visible message text.
+ * @param {player_info} player - Resolved player info.
+ * @returns {{ requester: string, tpa_type: string, accept_command: string } | null}
+ */
+function parse_tpa_info(commands, plain_text, player) {
+    for (const command of commands) {
+        const accept_match = command.match(/^\/((?:cmi\s+)?tp(?:accept|yes)|tpayes|tpyes)\b/i);
+        if (!accept_match) {
+            continue;
+        }
+
+        const requester_match = plain_text.match(/^(\S+)\s+请求/);
+        const requester = (player && player.username)
+            || (requester_match && requester_match[1])
+            || '';
+        const tpa_type = plain_text.includes('请求你传送')
+            || plain_text.toLowerCase().includes('tpahere')
+            ? 'tpahere'
+            : 'tpa';
+
+        return {
+            requester,
+            tpa_type,
+            accept_command: command,
+        };
+    }
+
+    return null;
+}
+
 function system_msg_handler(jsonMsg) {//处理方式：处理与玩家无关的消息（tp消息除外，算作系统信息）提取消息内容为纯文本，（tp消息应有player信息）若有将消息内容和消息位置封装成一个chat_msg对象并返回
     const plain_text = extract_plain_text(jsonMsg);
     let player = new player_info('', '', {});
     let position = 'system';
+    let data = {};
 
     // TPA 消息
     const commands = find_click_commands(jsonMsg);
-    let is_tpa = false;
+    player = player_info_handler(jsonMsg);
+    const tpa_info = parse_tpa_info(commands, plain_text, player);
+
     for (const cmd of commands) {
-        const tpa_accept = cmd.match(/^\/cmi\s+tpaccept\s+(\S+)/);
-        if (tpa_accept) { is_tpa = true; position = 'tpa'; break; }
-        const tpa_deny = cmd.match(/^\/cmi\s+tpdeny\s+(\S+)/);
-        if (tpa_deny) { is_tpa = true; position = 'tpa'; break; }
-        const tpa_cancel = cmd.match(/^\/cmi\s+tpa(?:here)?\s+(\S+)\s+-cancel-/);
-        if (tpa_cancel) { is_tpa = true; position = 'tpa'; break; }
+        const tpa_accept = cmd.match(/^\/((?:cmi\s+)?tp(?:accept|yes)|tpayes|tpyes)\b/i);
+        if (tpa_accept) {
+            position = 'tpa';
+            data = { tpa_info };
+            break;
+        }
+        const tpa_deny = cmd.match(/^\/(?:cmi\s+)?tpdeny\b/i);
+        if (tpa_deny) {
+            position = 'tpa';
+            data = { tpa_info };
+            break;
+        }
+        const tpa_cancel = cmd.match(/^\/(?:cmi\s+)?tpa(?:here)?\s+\S+\s+-cancel-/i);
+        if (tpa_cancel) {
+            position = 'tpa';
+            data = { tpa_info };
+            break;
+        }
     }
 
-    // 使用 player_info_handler 提取玩家信息（内部已有格式化比对）
-    player = player_info_handler(jsonMsg);
-
-    return new chat_msg(player, plain_text, position, Date.now());
+    return new chat_msg(player, plain_text, position, Date.now(), data);
 }
 
 function msg_handler(jsonMsg) {//处理方式：判断消息类型（聊天、击杀、玩家加入退出、私聊、系统信息），调用相应的处理函数进行处理并返回处理结果
@@ -289,7 +342,7 @@ function msg_handler(jsonMsg) {//处理方式：判断消息类型（聊天、�
     // === 2. 无 translate（CMI 插件） ===
     const commands = find_click_commands(jsonMsg);
     for (const cmd of commands) {
-        if (/\/cmi\s+tp(accept|deny|a|ahere)/i.test(cmd)) {
+        if (/^\/(?:(?:cmi\s+)?tp(?:accept|deny|a|ahere|yes)|tpayes|tpyes)\b/i.test(cmd)) {
             return system_msg_handler(jsonMsg);
         }
     }

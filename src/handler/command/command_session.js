@@ -1,3 +1,5 @@
+const { push_message } = require('../../utils/message_pusher');
+
 class CommandFinishSignal extends Error {
     constructor() {
         super('Command finished');
@@ -47,30 +49,34 @@ class CommandSession {
         this.time = this.msg.time || Date.now();
     }
 
-    async send(text) {
+    /**
+     * Send a reply through the configured channel.
+     * @param {string} text - Text to send.
+     * @param {object} [options] - Push options, including channel.
+     * @returns {Promise<void>}
+     */
+    async send(text, options = {}) {
         if (text === undefined || text === null) return;
         const content = String(text);
         this.replies.push(content);
 
-        if (this._reply) {
-            await this._reply(content, this);
+        if (this._reply && !options.channel) {
+            await this._reply(content, this, options);
             return;
         }
 
-        const username = this.player && this.player.username;
-        if (this.bot && username && typeof this.bot.whisper === 'function') {
-            this.bot.whisper(username, content);
-            return;
-        }
-
-        if (this.bot && typeof this.bot.chat === 'function') {
-            this.bot.chat(content);
-        }
+        await push_message(this.bot, this, content, options);
     }
 
-    async finish(text) {
+    /**
+     * Send an optional final reply and stop command execution.
+     * @param {string} text - Optional text to send.
+     * @param {object} [options] - Push options, including channel.
+     * @returns {Promise<void>}
+     */
+    async finish(text, options = {}) {
         if (text !== undefined && text !== null) {
-            await this.send(text);
+            await this.send(text, options);
         }
         throw new CommandFinishSignal();
     }

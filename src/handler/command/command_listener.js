@@ -1,5 +1,7 @@
 const { get_commands } = require('./command_registry');
 const { get_message_permission, has_permission } = require('./utils/permission_utils');
+const config = require('../../configs/config');
+const permission_store = require('../../utils/permission_store');
 const {
     get_prefix,
     get_cancel_command,
@@ -16,6 +18,25 @@ const {
 } = require('./command_session');
 
 const waiting_sessions = new Map();
+
+/**
+ * Build default listener options from runtime config and persistent permissions.
+ * @param {object} options - Explicit listener options.
+ * @returns {object} Listener options.
+ */
+function build_default_options(options = {}) {
+    permission_store.ensure_loaded(config);
+    return {
+        prefix: config.whisper_command_prefix || '#',
+        cancel_command: '#cancel',
+        default_permission: 'guest',
+        ...options,
+        permission_resolver: options.permission_resolver || ((msg) => {
+            const username = msg && msg.player && msg.player.username;
+            return permission_store.get_player_permission(username, msg);
+        }),
+    };
+}
 
 /**
  * 挂起当前执行的逻辑，等待对应用户的下一条消息
@@ -224,14 +245,27 @@ async function dispatch_command(bot, msg, options = {}) {
  * @returns {Function} 移除监听器的回调函数
  */
 function listen_command(bot, options = {}) {
+    const listener_options = build_default_options(options);
     const listener = async (msg) => {
-        await dispatch_command(bot, msg, {
-            ...options,
+        const result = await dispatch_command(bot, msg, {
+            ...listener_options,
             await_handler: false,
         });
+        bot.emit('command_result', msg, result);
+        if (!result.handled && !result.ignored) {
+            bot.emit('command_unhandled', msg, result);
+        }
     };
     bot.on('msg_obj', listener);
     return () => bot.removeListener('msg_obj', listener);
+}
+
+/**
+ * mineflayer plugin entry for command dispatching.
+ * @param {object} bot - mineflayer bot instance.
+ */
+function command_listener_plugin(bot) {
+    listen_command(bot);
 }
 
 /**
@@ -261,10 +295,10 @@ async function trigger_command(bot, text, options = {}) {
     });
 }
 
-module.exports = {
+module.exports = Object.assign(command_listener_plugin, {
     listen_command,
     dispatch_command,
     trigger_command,
     parse_command_text,
     get_session_key,
-};
+});
