@@ -1,6 +1,6 @@
 # about the project
 
-此项目以JavaScript编写，基于mineflayer，可以做到：读取账号信息，进行登录，发送服务器消息至console以供解析（目前正在与[nonebot部分](https://github.com/raincatsanddogs/enanabot)拆分以更好集成，拆分后会使用WebSocket进行通信）
+（文档待更新！）此项目以JavaScript编写，基于mineflayer，可以做到：读取账号信息，进行登录，发送服务器消息至console以供解析（目前正在与[nonebot部分](https://github.com/raincatsanddogs/enanabot)拆分以更好集成，拆分后会使用WebSocket进行通信）
 
 ## configs/
 
