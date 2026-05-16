@@ -69,22 +69,6 @@ function normalizePlayerNameList(listLike) {
     .filter((item) => item.length > 0);
 }
 
-// send_group is the only accepted group whitelist field.
-config.send_group = normalizeIdList(
-  config.send_group
-  ?? connectConfig.send_group
-  ?? connectConfig.sendGroup
-);
-config.ignore_user = normalizeIdList(
-  config.ignore_user ?? connectConfig.ignore_user ?? connectConfig.ignoreUser
-);
-config.forward_prefix = (
-  config.forward_prefix
-  ?? connectConfig.forward_prefix
-  ?? connectConfig.forwardPrefix
-  ?? '[群聊]>>'
-).toString().trim() || '[群聊]>>';
-
 // Whisper 指令鉴权配置
 config.admin_players = normalizePlayerNameList(
   config.admin_players
@@ -107,49 +91,12 @@ config.guest_players = normalizePlayerNameList(
   ?? connectConfig.guestPlayers
 );
 
-config.whisper_command_prefix = (
-  config.whisper_command_prefix
-  ?? connectConfig.whisper_command_prefix
-  ?? connectConfig.whisperCommandPrefix
+config.command_prefix = (
+  config.command_prefix
+  ?? connectConfig.command_prefix
+  ?? connectConfig.commandPrefix
   ?? '#'
 ).toString().trim() || '#';
-
-config.command_echo_filter_enabled = (() => {
-  const raw = (
-    config.command_echo_filter_enabled
-    ?? config.commandEchoFilterEnabled
-    ?? connectConfig.command_echo_filter_enabled
-    ?? connectConfig.commandEchoFilterEnabled
-  );
-
-  if (raw === undefined || raw === null) {
-    return true;
-  }
-
-  if (typeof raw === 'string') {
-    const lowered = raw.trim().toLowerCase();
-    if (['false', '0', 'off', 'no'].includes(lowered)) return false;
-    if (['true', '1', 'on', 'yes'].includes(lowered)) return true;
-  }
-
-  return Boolean(raw);
-})();
-
-config.command_echo_prefix = (
-  config.command_echo_prefix
-  ?? config.commandEchoPrefix
-  ?? connectConfig.command_echo_prefix
-  ?? connectConfig.commandEchoPrefix
-  ?? '__WORDLE_CMD__'
-).toString().trim() || '__WORDLE_CMD__';
-
-config.command_echo_bot_names = normalizePlayerNameList(
-  config.command_echo_bot_names
-  ?? config.commandEchoBotNames
-  ?? connectConfig.command_echo_bot_names
-  ?? connectConfig.commandEchoBotNames
-  ?? []
-);
 
 // 4. 导出对象
 module.exports = config;

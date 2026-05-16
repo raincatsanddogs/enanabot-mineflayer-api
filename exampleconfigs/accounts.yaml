@@ -16,3 +16,11 @@ skin:
   - url: ""
     authServer: ""
     sessionServer: ""
+reconnect:
+  #这里填你的掉线重连设置，以下为示例
+  #  reconnect: true #是否启用掉线重连，默认为true
+  #  interval: 5 #掉线重连的时间间隔，单位为秒，默认为5秒
+  #  max_attempts: 5 #掉线重连的最大尝试次数，默认为5次，设置为0表示无限重连
+  reconnect: true
+  interval: 5
+  max_attempts: 5
