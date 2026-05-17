@@ -6,22 +6,29 @@ const {
     get_display_name_nodes,
     extract_nickname_nodes,
     match_formatted_nodes,
+    _collect_hover_events,
+    _extract_visible_text,
+    _collect_player_names_from_node,
+    _merge_player_result,
+    _finalize_player_result,
+    _normalize_translate_message,
+    _build_translate_data,
+    _get_primary_player
 } = require('./utils');
 
 /**
  * @param {mineflayer.Bot} bot // to enable intellisense
  */
 
-let raw_msg = null;
 let _bot = null; // 模块级 bot 引用，在 module.exports 中赋值
 
 class chat_msg {
     /**
-     * @param {player_info} player - Player info.
-     * @param {string} message - Plain message text.
-     * @param {string} position - Message position.
-     * @param {number} time - Timestamp.
-     * @param {object} [data] - Extra parsed metadata.
+     * @param {player_info|Array<player_info>|null} player - Player info,可能为数组或单个对象或null
+     * @param {string} message - 消息纯文本，有翻译键的消息放于data部分
+     * @param {string} position - 消息位置，public（公屏）、private（私聊）、private_outgoing（私聊发出）、system（系统信息）、tpa（TPA相关）
+     * @param {number} time - 消息接收的时间戳（毫秒）
+     * @param {object} [data] - 其他信息，包括可能存在的翻译键、物品、怪物信息.
      */
     constructor(player, message, position, time, data = {}) {
         this.player = player;
@@ -47,8 +54,6 @@ class player_info {
 }
 
 let player_info_list = []; //存储玩家信息的数组，元素为player_info对象
-
-// ===== 内部解析辅助 =====
 
 /**
  * 根据 username 或昵称从 player_info_list / bot.players 中解析 player_info
@@ -112,32 +117,28 @@ function _resolve_player_info(name, nickname_nodes) {
  * 2.若无原版翻译键则为插件消息，尝试从extra中提取玩家信息，使用bot.player获取player信息并进行比对，若失败则返回空字符串
  */
 function player_info_handler(jsonMsg) {
+    const players = [];
+
     // === 1. 原版消息解析：有 translate + with 数组 ===
     const translate = jsonMsg.translate || (jsonMsg.json && jsonMsg.json.translate) || null;
     const with_arr = (jsonMsg.json && jsonMsg.json.with) || jsonMsg.with || null;
+    const nickname_nodes = extract_nickname_nodes(jsonMsg);
 
     if (translate && Array.isArray(with_arr) && with_arr.length > 0) {
-        const first_with = with_arr[0];
-        let username = '';
-        if (first_with && typeof first_with === 'object') {
-            if (typeof first_with.insertion === 'string' && first_with.insertion) {
-                username = first_with.insertion;
-            } else if (first_with.hover_event && typeof first_with.hover_event.name === 'string') {
-                username = first_with.hover_event.name;
-            } else if (typeof first_with.text === 'string' && first_with.text) {
-                username = first_with.text;
-            }
-        } else if (typeof first_with === 'string') {
-            username = first_with;
+        const names_set = new Set();
+        _collect_player_names_from_node(with_arr, names_set);
+        for (const name of names_set) {
+            const resolved = _resolve_player_info(name, null);
+            _merge_player_result(players, resolved, name);
         }
-        if (username) return _resolve_player_info(username, null);
+        if (players.length > 0) return _finalize_player_result(players);
     }
 
     // === 2. CMI 插件消息：格式化节点比对优先 ===
-    const nickname_nodes = extract_nickname_nodes(jsonMsg);
     if (nickname_nodes.length > 0) {
         const resolved = _resolve_player_info(null, nickname_nodes);
-        if (resolved.username) return resolved;
+        _merge_player_result(players, resolved);
+        if (players.length > 0) return _finalize_player_result(players);
     }
 
     // === 3. click_event 提取 + 格式化节点辅助比对 ===
@@ -154,27 +155,35 @@ function player_info_handler(jsonMsg) {
             const match = cmd.match(pattern);
             if (match) {
                 const resolved = _resolve_player_info(match[1], nickname_nodes);
-                if (resolved.username) return resolved;
+                _merge_player_result(players, resolved, match[1]);
             }
         }
     }
+    if (players.length > 0) return _finalize_player_result(players);
 
     // === 4. 纯文本中查找已知玩家名 ===
     const plain_text = extract_plain_text(jsonMsg);
     if (_bot && _bot.players && plain_text) {
         for (const p_name in _bot.players) {
             if (plain_text.includes(p_name)) {
-                return _resolve_player_info(p_name, nickname_nodes);
+                const resolved = _resolve_player_info(p_name, nickname_nodes);
+                _merge_player_result(players, resolved, p_name);
             }
         }
     }
 
-    return new player_info('', '', {});
+    return _finalize_player_result(players);
 }
 
-function chat_msg_handler(jsonMsg) {//处理方式：提取消息内容（为聊天、击杀、玩家加入退出、私聊类型）（若有翻译键直接使用翻译键，获得成就需特殊处理，消息需传翻译键的数组）为纯文本，提取消息位置（公屏/私聊），提取玩家信息（调用player_info_handler函数），将玩家信息、消息内容和消息位置封装成一个chat_msg对象并返回
+/**
+ * @param {object} jsonMsg - 原版json格式聊天消息
+ * @returns {chat_msg} - 封装后的chat_msg对象
+ * 处理方式：提取消息内容（为聊天、击杀、玩家加入退出、私聊类型）（若有翻译键直接使用翻译键，获得成就需特殊处理，消息需传翻译键的数组）为纯文本，提取消息位置（公屏/私聊），提取玩家信息（调用player_info_handler函数），将玩家信息、消息内容和消息位置封装成一个chat_msg对象并返回
+ */
+function chat_msg_handler(jsonMsg) {
     const player = player_info_handler(jsonMsg);
     const plain_text = extract_plain_text(jsonMsg);
+    const visible_text = _extract_visible_text(jsonMsg).trim();
     let message = '';
     let position = 'public';
 
@@ -186,46 +195,32 @@ function chat_msg_handler(jsonMsg) {//处理方式：提取消息内容（为聊
 
         if (translate === 'chat.type.text') {
             position = 'public';
-            if (with_arr.length >= 2) message = extract_plain_text(with_arr[1]);
+            if (with_arr.length >= 2) message = _extract_visible_text(with_arr[1]).trim();
         } else if (translate === 'commands.message.display.incoming') {
             position = 'private';
-            if (with_arr.length >= 2) message = extract_plain_text(with_arr[1]);
+            if (with_arr.length >= 2) message = _extract_visible_text(with_arr[1]).trim();
         } else if (translate === 'commands.message.display.outgoing') {
-            position = 'private';
-            if (with_arr.length >= 2) message = extract_plain_text(with_arr[1]);
+            position = 'private_outgoing';
+            if (with_arr.length >= 2) message = _extract_visible_text(with_arr[1]).trim();
         } else if (translate === 'multiplayer.player.joined' || translate === 'multiplayer.player.left') {
-            position = 'system';
-            message = translate;
+            position = 'system_info';
+            message = _extract_visible_text(with_arr).trim();
         } else if (translate.startsWith('death.')) {
-            position = 'system';
-            let translate_keys = [translate];
-            for (const w of with_arr) {
-                if (w && typeof w === 'object' && typeof w.translate === 'string') {
-                    translate_keys.push(w.translate);
-                }
-            }
-            message = translate_keys.join(',');
+            position = 'system_info';
+            message = _extract_visible_text(with_arr).trim();
         } else if (translate.startsWith('chat.type.advancement.')) {
-            position = 'system';
-            let translate_keys = [translate];
-            for (const w of with_arr) {
-                if (w && typeof w === 'object') {
-                    if (typeof w.translate === 'string') translate_keys.push(w.translate);
-                    if (Array.isArray(w.with)) {
-                        for (const ww of w.with) {
-                            if (ww && typeof ww === 'object' && typeof ww.translate === 'string') {
-                                translate_keys.push(ww.translate);
-                            }
-                        }
-                    }
-                }
-            }
-            message = translate_keys.join(',');
+            position = 'system_info';
+            message = _extract_visible_text(with_arr).trim();
         } else {
-            position = 'system';
-            message = plain_text || translate;
+            position = 'system_info';
+            message = visible_text;
         }
-        return new chat_msg(player, message, position, Date.now());
+        const hover_data_v = _collect_hover_events(jsonMsg);
+        message = _normalize_translate_message(message, plain_text, visible_text, translate);
+        const data_v = { translate: _build_translate_data(jsonMsg, translate) };
+        if (hover_data_v.items.length > 0) data_v.items = hover_data_v.items;
+        if (hover_data_v.entities.length > 0) data_v.entities = hover_data_v.entities;
+        return new chat_msg(player, message, position, Date.now(), data_v);
     }
 
     // === CMI 插件消息 ===
@@ -250,7 +245,11 @@ function chat_msg_handler(jsonMsg) {//处理方式：提取消息内容（为聊
         position = 'public';
         message = plain_text;
     }
-    return new chat_msg(player, message, position, Date.now());
+    const hover_data_c = _collect_hover_events(jsonMsg);
+    const data_c = {};
+    if (hover_data_c.items.length > 0) data_c.items = hover_data_c.items;
+    if (hover_data_c.entities.length > 0) data_c.entities = hover_data_c.entities;
+    return new chat_msg(player, message, position, Date.now(), Object.keys(data_c).length > 0 ? data_c : undefined);
 }
 
 /**
@@ -261,6 +260,7 @@ function chat_msg_handler(jsonMsg) {//处理方式：提取消息内容（为聊
  * @returns {{ requester: string, tpa_type: string, accept_command: string } | null}
  */
 function parse_tpa_info(commands, plain_text, player) {
+    const primary_player = _get_primary_player(player);
     for (const command of commands) {
         const accept_match = command.match(/^\/((?:cmi\s+)?tp(?:accept|yes)|tpayes|tpyes)\b/i);
         if (!accept_match) {
@@ -268,7 +268,7 @@ function parse_tpa_info(commands, plain_text, player) {
         }
 
         const requester_match = plain_text.match(/^(\S+)\s+请求/);
-        const requester = (player && player.username)
+        const requester = (primary_player && primary_player.username)
             || (requester_match && requester_match[1])
             || '';
         const tpa_type = plain_text.includes('请求你传送')
@@ -286,10 +286,17 @@ function parse_tpa_info(commands, plain_text, player) {
     return null;
 }
 
-function system_msg_handler(jsonMsg) {//处理方式：处理与玩家无关的消息（tp消息除外，算作系统信息）提取消息内容为纯文本，（tp消息应有player信息）若有将消息内容和消息位置封装成一个chat_msg对象并返回
+/**
+ * @param {object} jsonMsg - 原版json格式聊天消息
+ * @returns {chat_msg} - 封装后的chat_msg对象
+ * 处理方式：处理与玩家无关的消息（tp消息除外，算作系统信息）提取消息内容为纯文本，（tp消息应有player信息）若有将消息内容和消息位置封装成一个chat_msg对象并返回
+ */
+function system_msg_handler(jsonMsg) {
     const plain_text = extract_plain_text(jsonMsg);
+    const visible_text = _extract_visible_text(jsonMsg).trim();
     let player = new player_info('', '', {});
     let position = 'system';
+    let message = plain_text;
     let data = {};
 
     // TPA 消息
@@ -318,10 +325,28 @@ function system_msg_handler(jsonMsg) {//处理方式：处理与玩家无关的�
         }
     }
 
-    return new chat_msg(player, plain_text, position, Date.now(), data);
+    // 未知 translate 消息 → system_info
+    const translate = jsonMsg.translate || (jsonMsg.json && jsonMsg.json.translate) || null;
+    if (position === 'system' && translate) {
+        position = 'system_info';
+        message = _normalize_translate_message(visible_text, plain_text, visible_text, translate);
+        data.translate = _build_translate_data(jsonMsg, translate);
+    }
+
+    // 收集物品/实体 hover 信息
+    const hover_data_s = _collect_hover_events(jsonMsg);
+    if (hover_data_s.items.length > 0) data.items = hover_data_s.items;
+    if (hover_data_s.entities.length > 0) data.entities = hover_data_s.entities;
+
+    return new chat_msg(player, message, position, Date.now(), data);
 }
 
-function msg_handler(jsonMsg) {//处理方式：判断消息类型（聊天、击杀、玩家加入退出、私聊、系统信息），调用相应的处理函数进行处理并返回处理结果
+/**
+ * @param {object} jsonMsg - 原版json格式聊天消息
+ * @returns {chat_msg} - 封装后的chat_msg对象
+ * 处理方式：判断消息类型（聊天、击杀、玩家加入退出、私聊、系统信息），调用相应的处理函数进行处理并返回处理结果
+ */
+function msg_handler(jsonMsg) {
     const translate = jsonMsg.translate || (jsonMsg.json && jsonMsg.json.translate) || null;
     const plain_text = extract_plain_text(jsonMsg);
 
@@ -378,7 +403,6 @@ function player_info_update_handler(player) {//处理方式：提取玩家的use
 module.exports = bot => {
     _bot = bot;
     bot.on('message', (jsonMsg) => {
-        raw_msg = jsonMsg;
         bot.emit('msg_obj', msg_handler(jsonMsg));
     });
     bot.on('playerUpdated', (player) => {

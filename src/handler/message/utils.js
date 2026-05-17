@@ -297,6 +297,221 @@ function match_formatted_nodes(nodes_a, nodes_b) {
     return true;
 }
 
+
+/**
+ * 递归收集消息中的 show_item 和 show_entity（非玩家）hover_event
+ * @param {object} jsonMsg - 完整的 jsonMsg 对象
+ * @returns {{ items: Array, entities: Array }}
+ */
+function _collect_hover_events(jsonMsg) {
+    const items = [];
+    const entities = [];
+
+    // 优先使用 json.with / json.extra，无则退回顶层（避免重复扫描）
+    const sources = [];
+    const _with = (jsonMsg.json && Array.isArray(jsonMsg.json.with)) ? jsonMsg.json.with
+        : (Array.isArray(jsonMsg.with) ? jsonMsg.with : []);
+    const _extra = (jsonMsg.json && Array.isArray(jsonMsg.json.extra)) ? jsonMsg.json.extra
+        : (Array.isArray(jsonMsg.extra) ? jsonMsg.extra : []);
+    sources.push(..._with, ..._extra);
+
+    for (const node of sources) {
+        if (!node || typeof node !== 'object') continue;
+        const he = node.hover_event || (node.json && node.json.hover_event);
+        if (!he || !he.action) continue;
+
+        if (he.action === 'show_item') {
+            const display_name = (he.components && he.components['minecraft:custom_name'])
+                || extract_plain_text(node).replace(/^\[|\]$/g, '').trim()
+                || '';
+            items.push({
+                id: he.id || '',
+                count: he.count || 1,
+                components: he.components || {},
+                display_name: display_name,
+            });
+        } else if (he.action === 'show_entity' && he.id !== 'minecraft:player') {
+            entities.push({
+                id: he.id || '',
+                uuid: he.uuid || null,
+                name: he.name || '',
+            });
+        }
+    }
+
+    return { items, entities };
+}
+
+/**
+ * 递归提取可见文本（不使用 translate 键作为回退）
+ * @param {object|string|Array|null} node
+ * @returns {string}
+ */
+function _extract_visible_text(node) {
+    if (node === null || node === undefined) return '';
+    if (typeof node === 'string') return node;
+    if (Array.isArray(node)) return node.map(_extract_visible_text).join('');
+    if (typeof node !== 'object') return '';
+
+    let result = '';
+    if (typeof node.text === 'string') {
+        result += node.text;
+    } else if (typeof node[''] === 'string') {
+        result += node[''];
+    }
+    if (Array.isArray(node.extra)) {
+        for (const child of node.extra) {
+            result += _extract_visible_text(child);
+        }
+    }
+    if (Array.isArray(node.with)) {
+        for (const child of node.with) {
+            result += _extract_visible_text(child);
+        }
+    }
+    return result;
+}
+
+function _is_probable_username(name) {
+    return typeof name === 'string' && /^[A-Za-z0-9_]{1,16}$/.test(name);
+}
+
+function _get_hover_event(node) {
+    if (!node || typeof node !== 'object') return null;
+    return node.hover_event || (node.json && node.json.hover_event) || null;
+}
+
+function _collect_translate_keys_from_node(node, keys_set) {
+    if (node === null || node === undefined) return;
+    if (Array.isArray(node)) {
+        for (const child of node) _collect_translate_keys_from_node(child, keys_set);
+        return;
+    }
+    if (typeof node !== 'object') return;
+
+    if (typeof node.translate === 'string' && node.translate) {
+        keys_set.add(node.translate);
+    }
+    if (Array.isArray(node.with)) {
+        for (const child of node.with) _collect_translate_keys_from_node(child, keys_set);
+    }
+    if (Array.isArray(node.extra)) {
+        for (const child of node.extra) _collect_translate_keys_from_node(child, keys_set);
+    }
+    if (node.json && typeof node.json === 'object') {
+        _collect_translate_keys_from_node(node.json, keys_set);
+    }
+
+    const hover_event = _get_hover_event(node);
+    if (hover_event && hover_event.action === 'show_text' && hover_event.value !== undefined) {
+        _collect_translate_keys_from_node(hover_event.value, keys_set);
+    }
+}
+
+function _collect_translate_keys(jsonMsg, fallback_translate) {
+    const keys_set = new Set();
+    _collect_translate_keys_from_node(jsonMsg, keys_set);
+    if (keys_set.size === 0 && fallback_translate) keys_set.add(fallback_translate);
+    return Array.from(keys_set);
+}
+
+function _collect_player_names_from_node(node, names_set) {
+    if (node === null || node === undefined) return;
+
+    if (Array.isArray(node)) {
+        for (const child of node) _collect_player_names_from_node(child, names_set);
+        return;
+    }
+    if (typeof node !== 'object') return;
+
+    const hover_event = _get_hover_event(node);
+    const is_show_entity = !!(hover_event && hover_event.action === 'show_entity');
+    const is_player_hover = !!(is_show_entity && hover_event.id === 'minecraft:player');
+    const is_non_player_entity = !!(is_show_entity && hover_event.id && hover_event.id !== 'minecraft:player');
+
+    if (is_player_hover && typeof hover_event.name === 'string' && hover_event.name) {
+        names_set.add(hover_event.name);
+    }
+
+    const click_event = node.click_event || (node.json && node.json.click_event);
+    let click_name = '';
+    if (click_event && typeof click_event.command === 'string') {
+        const match = click_event.command.match(/^\/(?:msg|tell)\s+(\S+)\s*$/i);
+        if (match && _is_probable_username(match[1])) {
+            click_name = match[1];
+            names_set.add(click_name);
+        }
+    }
+
+    const insertion_name = _is_probable_username(node.insertion) ? node.insertion : '';
+    const has_player_hint = is_player_hover || !!click_name || !!insertion_name;
+
+    if (!is_non_player_entity && has_player_hint) {
+        if (insertion_name) names_set.add(insertion_name);
+        if (_is_probable_username(node.text)) names_set.add(node.text);
+        if (_is_probable_username(node[''])) names_set.add(node['']);
+    }
+
+    if (Array.isArray(node.with)) {
+        for (const child of node.with) _collect_player_names_from_node(child, names_set);
+    }
+    if (Array.isArray(node.extra)) {
+        for (const child of node.extra) _collect_player_names_from_node(child, names_set);
+    }
+    if (node.json && typeof node.json === 'object') {
+        _collect_player_names_from_node(node.json, names_set);
+    }
+}
+
+function _merge_player_result(target, resolved, fallback_name = '') {
+    const username = (resolved && resolved.username) || fallback_name || '';
+    if (!username) return;
+
+    const key = username;
+    for (const p of target) {
+        if (p.username === key) return;
+    }
+
+    if (resolved && resolved.username) {
+        target.push(resolved);
+    } else {
+        target.push(new player_info(username, '', {}));
+    }
+}
+
+function _finalize_player_result(players) {
+    if (players.length === 0) return new player_info('', '', {});
+    if (players.length === 1) return players[0];
+    return players;
+}
+
+function _normalize_translate_message(message, plain_text, visible_text, translate) {
+    const fallback_text = plain_text || translate || '';
+    if (!message) return fallback_text;
+
+    const norm_message = message.replace(/\s+/g, '');
+    const norm_visible = (visible_text || '').replace(/\s+/g, '');
+    const norm_fallback = fallback_text.replace(/\s+/g, '');
+
+    if (norm_message && norm_visible && norm_message === norm_visible && norm_fallback && norm_fallback !== norm_visible) {
+        return fallback_text;
+    }
+    return message;
+}
+
+function _build_translate_data(jsonMsg, translate) {
+    const translate_keys = _collect_translate_keys(jsonMsg, translate);
+    if (translate_keys.length <= 1) return translate_keys[0] || translate;
+    return translate_keys;
+}
+
+function _get_primary_player(player) {
+    if (Array.isArray(player)) {
+        return player.length > 0 ? player[0] : new player_info('', '', {});
+    }
+    return player || new player_info('', '', {});
+}
+
 module.exports = {
     extract_plain_text,
     find_click_commands,
@@ -305,4 +520,12 @@ module.exports = {
     extract_nickname_nodes,
     normalize_nodes,
     match_formatted_nodes,
+    _collect_hover_events,
+    _extract_visible_text,
+    _collect_player_names_from_node,
+    _merge_player_result,
+    _finalize_player_result,
+    _normalize_translate_message,
+    _build_translate_data,
+    _get_primary_player
 };
