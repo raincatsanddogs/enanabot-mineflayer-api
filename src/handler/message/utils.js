@@ -6,6 +6,37 @@
  * 所有函数命名遵循 snake_case 规范。
  */
 
+class chat_msg {
+    /**
+     * @param {player_info|Array<player_info>|null} player - Player info,可能为数组或单个对象或null
+     * @param {string} message - 消息纯文本，有翻译键的消息放于data部分
+     * @param {string} position - 消息位置，public（公屏）、private（私聊）、private_outgoing（私聊发出）、system（系统信息）、tpa（TPA相关）
+     * @param {number} time - 消息接收的时间戳（毫秒）
+     * @param {object} [data] - 其他信息，包括可能存在的翻译键、物品、怪物信息.
+     */
+    constructor(player, message, position, time, data = {}) {
+        this.player = player;
+        this.message = message;
+        this.position = position;
+        this.time = time;
+        this.data = data;
+    }
+}
+
+/**
+ * 玩家信息类，包含玩家的username、uuid和nickname（若有）
+ * 其中username为玩家的原版用户名，uuid为玩家的唯一标识符，nickname为玩家的昵称（若有）
+ * nickname为一个对象，格式遵循minecraft消息中的extra，包含text、color、bold、italic、underlined、strikethrough、obfuscated等属性
+ * 例如：{"text":"玩家昵称","color":"red","bold":true}
+ */
+class player_info {
+    constructor(username, uuid, nickname) {
+        this.username = username;
+        this.uuid = uuid;
+        this.nickname = nickname;
+    }
+}
+
 // ===== 基础文本提取 =====
 
 /**
@@ -527,5 +558,7 @@ module.exports = {
     _finalize_player_result,
     _normalize_translate_message,
     _build_translate_data,
-    _get_primary_player
+    _get_primary_player,
+    chat_msg,
+    player_info
 };
