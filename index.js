@@ -15,10 +15,6 @@ const { trigger_command } = require('./src/handler/command');
 const register_plugins = require('./src/plugins');
 const ipc = require('./src/ipc/ipc_protocol');
 
-const QQ_FORWARD_PREFIX = (typeof config.forward_prefix === 'string' && config.forward_prefix.trim())
-    ? config.forward_prefix.trim()
-    : '[群聊]>>';
-
 const start_args = process.argv.slice(2);
 
 try {
@@ -42,212 +38,6 @@ try {
 }
 
 const profile = (start_args[1] - 1) || 0;
-
-/**
- * Build a QQ-forwarded message for public Minecraft chat.
- * @param {string} message - Raw QQ message.
- * @returns {string} Message sent to Minecraft.
- */
-function build_forward_message(message) {
-    const normalized = String(message || '').trim();
-    if (!normalized) {
-        return '';
-    }
-    if (normalized.startsWith(QQ_FORWARD_PREFIX)) {
-        return normalized;
-    }
-    return `${QQ_FORWARD_PREFIX} ${normalized}`;
-}
-
-/**
- * Check whether a value is in an allow/deny list.
- * @param {unknown[]} list - List of ids.
- * @param {unknown} value - Candidate id.
- * @returns {boolean} Whether the value is included.
- */
-function list_includes_id(list, value) {
-    if (!Array.isArray(list)) {
-        return false;
-    }
-    return list.includes(value);
-}
-
-/**
- * Convert a msg_obj into the legacy MC message payload consumed by Python.
- * @param {object} msg - msg_obj from message_handler.
- * @returns {object} IPC payload.
- */
-function build_mc_message_payload(msg) {
-    const type_map = {
-        public: 'chat',
-        private: 'whisper',
-        private_outgoing: 'whisper',
-        system: 'server_cmd',
-        tpa: 'tpa',
-    };
-
-    return {
-        time_stamp: new Date(msg.time || Date.now()).toISOString(),
-        type: type_map[msg.position] || msg.position || 'server_cmd',
-        text: msg.message || '',
-        translate: '',
-        params: msg.player ? [msg.player] : [],
-    };
-}
-
-/**
- * Forward non-command Minecraft messages to Python.
- * @param {object} bot - mineflayer bot instance.
- * @param {object} msg - msg_obj from message_handler.
- */
-function forward_unhandled_msg_obj(bot, msg) {
-    if (!msg || msg.suppress_forward || msg.position === 'private' || msg.position === 'private_outgoing') {
-        return;
-    }
-
-    if (bot
-        && msg.player
-        && typeof msg.player.username === 'string'
-        && msg.player.username.toLowerCase() === String(bot.username || '').toLowerCase()) {
-        return;
-    }
-
-    const encoded = ipc.encode(ipc.ACTION_MC_MESSAGE, build_mc_message_payload(msg));
-    process.stdout.write(encoded);
-}
-
-/**
- * Execute a delegated command through the unified command system.
- * @param {object} bot - mineflayer bot instance.
- * @param {object} data - Delegate payload.
- * @returns {Promise<void>}
- */
-async function handle_delegated_command(bot, data = {}) {
-    const command = String(data.command || '').trim();
-    const args = Array.isArray(data.args) ? data.args.map((item) => String(item)) : [];
-    const reply_to = data.reply_to || '';
-
-    if (!command) {
-        process.stdout.write(ipc.encode(ipc.ACTION_DELEGATE_RESULT, {
-            reply_to,
-            command,
-            args,
-            result: '未知委托指令',
-        }));
-        return;
-    }
-
-    const prefix = config.whisper_command_prefix || '#';
-    const text = `${prefix}${command}${args.length > 0 ? ` ${args.join(' ')}` : ''}`;
-    const replies = [];
-
-    try {
-        const result = await trigger_command(bot, text, {
-            username: reply_to || 'ipc',
-            permission: data.permission || 'user',
-            reply: async (reply_text) => {
-                replies.push(String(reply_text));
-            },
-        });
-
-        process.stdout.write(ipc.encode(ipc.ACTION_DELEGATE_RESULT, {
-            reply_to,
-            command,
-            args,
-            result: result.handled
-                ? replies.join('\n')
-                : `未知委托指令: ${command}`,
-        }));
-    } catch (err) {
-        process.stdout.write(ipc.encode(ipc.ACTION_DELEGATE_RESULT, {
-            reply_to,
-            command,
-            args,
-            result: `指令执行失败: ${err.message || err}`,
-        }));
-    }
-}
-
-/**
- * Handle one decoded IPC envelope from Python.
- * @param {object} bot - mineflayer bot instance.
- * @param {object} envelope - Decoded IPC envelope.
- */
-function handle_incoming_ipc(bot, envelope) {
-    const { action, data } = envelope;
-
-    switch (action) {
-        case ipc.ACTION_QQ_MESSAGE: {
-            const incoming = {
-                msg: String((data && data.msg) || '').trim(),
-                group_id: data && data.group_id,
-                sender_id: data && data.sender_id,
-            };
-
-            if (!incoming.msg) {
-                return;
-            }
-            if (!list_includes_id(config.send_group, incoming.group_id)) {
-                return;
-            }
-            if (list_includes_id(config.ignore_user, incoming.sender_id)) {
-                return;
-            }
-
-            const outgoing_text = build_forward_message(incoming.msg);
-            if (outgoing_text) {
-                bot.chat(outgoing_text);
-            }
-            break;
-        }
-
-        case ipc.ACTION_WHISPER_REPLY: {
-            const target_player = data && data.target_player;
-            const reply_msg = data && data.msg;
-            if (typeof target_player === 'string'
-                && target_player
-                && typeof reply_msg === 'string'
-                && reply_msg) {
-                bot.whisper(target_player, reply_msg);
-            }
-            break;
-        }
-
-        case ipc.ACTION_DELEGATE_COMMAND:
-            handle_delegated_command(bot, data);
-            break;
-
-        default:
-            console.warn(`未知的 IPC action: ${action}`);
-    }
-}
-
-/**
- * Setup stdin IPC bridge from Python to JS.
- * @param {object} bot - mineflayer bot instance.
- */
-function setup_readline_bridge(bot) {
-    const rl = readline.createInterface({
-        input: process.stdin,
-        crlfDelay: Infinity,
-    });
-
-    rl.on('line', (line) => {
-        try {
-            const envelope = ipc.decode(line);
-            if (!envelope) {
-                return;
-            }
-            handle_incoming_ipc(bot, envelope);
-        } catch (err) {
-            console.error(`处理 stdin 消息失败: ${err.message || err}`);
-        }
-    });
-
-    rl.on('close', () => {
-        console.warn('stdin 已关闭，readline 停止监听');
-    });
-}
 
 /**
  * Main bootstrap routine.
@@ -279,16 +69,10 @@ async function main() {
     bot.loadPlugin(command_listener);
 
     setup_readline_bridge(bot);
-
-    bot.on('command_unhandled', (msg) => {
-        forward_unhandled_msg_obj(bot, msg);
-    });
-
-    let player_list_interval = null;
-
+    /*
     /**
      * Collect online players and send the list through IPC.
-     */
+     *
     function collect_player_list() {
         const player_list = [];
 
@@ -315,13 +99,13 @@ async function main() {
             timestamp: new Date().toISOString(),
             bot_username: bot.username,
         }));
-    }
+    }仍有可以借鉴的部分，完成后删除
+    */
 
-    bot.once('spawn', () => {
-        collect_player_list();
-        player_list_interval = setInterval(collect_player_list, 5 * 60 * 1000);
-    });
-
+    /*
+     * 处理加入服务器时可能会遇到的资源包请求
+     *
+     */
     bot._client.on('add_resource_pack', (packet) => {
         const uuid = packet.uuid || packet.packId || '00000000-0000-0000-0000-000000000000';
         bot._client.write('resource_pack_receive', { uuid, result: 0 });
@@ -329,7 +113,6 @@ async function main() {
             bot._client.write('resource_pack_receive', { uuid, result: 3 });
         }, 30);
     });
-
     bot._client.on('resource_pack_send', () => {
         bot._client.write('resource_pack_receive', { result: 0 });
         setTimeout(() => {
@@ -347,10 +130,6 @@ async function main() {
     });
 
     bot.on('end', (reason) => {
-        if (player_list_interval) {
-            clearInterval(player_list_interval);
-            player_list_interval = null;
-        }
         console.warn(`Bot disconnected: ${reason}`);
         process.exit(1);
     });
