@@ -280,6 +280,7 @@ function command_listener_plugin(bot) {
  */
 async function trigger_command(bot, text, options = {}) {
     const msg = {
+        msg_id: options.msg_id,
         bot_id: options.bot_id,
         player: options.player || {
             username: options.username || 'system',

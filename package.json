@@ -11,7 +11,7 @@
     "minecraft-bot": "index.js"
   },
   "scripts": {
-    "test": "",
+    "test": "node test/websocket.test.js",
     "postinstall": "patch-package"
   },
   "dependencies": {
@@ -101,6 +101,7 @@
     "vec3": "^0.1.10",
     "webidl-conversions": "^3.0.1",
     "whatwg-url": "^5.0.0",
+    "ws": "^8.20.1",
     "xxhash-wasm": "^0.4.2",
     "yggdrasil": "^1.7.0"
   },

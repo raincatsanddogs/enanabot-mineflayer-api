@@ -12,6 +12,7 @@ const message_handler = require('./src/handler/message/message_handler');
 const command_listener = require('./src/handler/command/command_listener');
 const register_plugins = require('./src/plugins');
 const { build_bot_scope } = require('./src/utils/bot_context');
+const { start_websocket_server } = require('./src/websocket/server');
 
 /**
  * Validate legacy CLI arguments without creating a bot.
@@ -239,11 +240,11 @@ async function create_bot(login_options, runtime_context = {}) {
  * @returns {Promise<void>}
  */
 async function main() {
-    const preset = parse_start_args(process.argv.slice(2));
-    const connect = config.connect || {};
-    console.log(`配置预设已加载: account=${preset.account}, server=${preset.server}`);
-    console.log(`WebSocket 服务将在后续实现中监听 ${connect.host || 'localhost'}:${connect.port || '<unset>'}`);
-    console.log('当前入口不会在进程启动时创建 Mineflayer bot。');
+    start_websocket_server({
+        config,
+        create_bot,
+        build_login_options_from_preset,
+    });
 }
 
 if (require.main === module) {
@@ -258,5 +259,6 @@ module.exports = {
     build_login_options_from_preset,
     build_mineflayer_options,
     create_bot,
+    start_websocket_server,
     main,
 };

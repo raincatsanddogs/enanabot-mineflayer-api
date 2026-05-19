@@ -13,6 +13,7 @@ connect:
   #  retry: 3 ws连接重试次数，默认为3次
   #  host: "localhost" ws的主机地址，默认为localhost
   #  port: xxxxx ws连接的端口
+  #  token: "change-me" ws认证令牌，必须配置
   #  admin_players: ["player1"] 可通过 MC 私聊执行所有指令的玩家名列表（管理员）
   #  user_players: ["player2"] 可通过 MC 私聊执行部分安全指令的玩家名列表（普通用户）
   #  guest_players: ["player3"] 可选显式访客列表；未命中 admin/user 的玩家默认同样视为 guest
@@ -23,6 +24,7 @@ connect:
   retry: 3
   host: "localhost"
   port: xxxxx
+  token: "change-me"
   admin_players: []
   user_players: []
   guest_players: []

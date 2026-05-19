@@ -13,3 +13,4 @@ tests/
 raw_json_msgs/
 /configs/
 test/
+/postman/
