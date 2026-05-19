@@ -1,9 +1,9 @@
 /**
  * @module message_pusher
- * @description Unified message push helper for private, public, and IPC replies.
+ * @description Unified message push helper for private, public, and external replies.
  */
 
-const ipc = require('../ipc/ipc_protocol');
+const { get_bot_context } = require('./bot_context');
 
 /**
  * Send text through the selected channel.
@@ -33,14 +33,25 @@ async function push_message(bot, session, text, options = {}) {
     }
 
     if (channel === 'ipc') {
-        const action = options.action || ipc.ACTION_DELEGATE_RESULT;
+        const context = get_bot_context(bot);
         const data = {
             reply_to: options.reply_to || (session && session.player && session.player.username) || '',
             command: options.command || (session && session.command_name) || '',
             result: content,
             ...(options.data || {}),
         };
-        process.stdout.write(ipc.encode(action, data));
+
+        // "ipc" is kept as a compatibility channel name for existing command
+        // code, but the transport is now supplied by the WebSocket/runtime layer.
+        if (typeof context.push_reply === 'function') {
+            await context.push_reply(data, session, options);
+            return;
+        }
+        if (typeof context.push_event === 'function') {
+            await context.push_event('system.notice', data, session, options);
+            return;
+        }
+        console.warn(`[message_pusher] external channel unavailable: ${content}`);
         return;
     }
 

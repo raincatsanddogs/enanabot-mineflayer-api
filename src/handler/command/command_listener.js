@@ -9,6 +9,7 @@ const {
     parse_command_text,
     is_command_position,
     is_bot_self_message,
+    attach_bot_id,
 } = require('./utils/command_text_utils');
 const {
     CommandSession,
@@ -139,6 +140,8 @@ async function run_handler(command, session, options = {}) {
  * @returns {Promise<object>} 返回处理结果 (包含 handled, command, session, replies 等状态)
  */
 async function dispatch_command(bot, msg, options = {}) {
+    attach_bot_id(bot, msg);
+
     if (!is_command_position(msg) || !msg.message) {
         return { handled: false, replies: [] };
     }
@@ -277,6 +280,7 @@ function command_listener_plugin(bot) {
  */
 async function trigger_command(bot, text, options = {}) {
     const msg = {
+        bot_id: options.bot_id,
         player: options.player || {
             username: options.username || 'system',
             uuid: options.uuid || '',

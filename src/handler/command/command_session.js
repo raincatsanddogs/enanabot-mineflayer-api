@@ -25,6 +25,11 @@ class CommandSession {
     constructor(options = {}) {
         this.bot = options.bot || null;
         this.msg = options.msg || {};
+        this.bot_id = this.msg.bot_id || (
+            this.bot
+            && this.bot.__enanabot_context
+            && this.bot.__enanabot_context.bot_id
+        ) || 'default';
         this.player = this.msg.player || {};
         this.message = this.msg.message || '';
         this.position = this.msg.position || 'internal';
@@ -43,6 +48,7 @@ class CommandSession {
 
     update_msg(msg) {
         this.msg = msg || {};
+        this.bot_id = this.msg.bot_id || this.bot_id || 'default';
         this.player = this.msg.player || {};
         this.message = this.msg.message || '';
         this.position = this.msg.position || this.position;

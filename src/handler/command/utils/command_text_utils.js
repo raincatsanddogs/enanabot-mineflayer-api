@@ -1,5 +1,6 @@
 const { normalize_command_name } = require('../command_registry');
 const { normalize_player_name } = require('./permission_utils');
+const { get_bot_id } = require('../../../utils/bot_context');
 
 function get_prefix(options = {}) {
     return typeof options.prefix === 'string' && options.prefix.length > 0
@@ -13,12 +14,18 @@ function get_cancel_command(options = {}) {
         : '#cancel';
 }
 
+/**
+ * Build a command session key that is unique across concurrent bot instances.
+ * @param {object} msg - Command message object.
+ * @returns {string} Session key.
+ */
 function get_session_key(msg) {
+    const bot_id = msg && msg.bot_id ? String(msg.bot_id) : 'default';
     const position = msg && msg.position ? msg.position : 'internal';
     const username = msg && msg.player && msg.player.username
         ? msg.player.username
         : 'system';
-    return `${position}:${username}`.toLowerCase();
+    return `${bot_id}:${position}:${username}`.toLowerCase();
 }
 
 function parse_command_text(text, prefix) {
@@ -50,6 +57,20 @@ function is_bot_self_message(bot, msg, options = {}) {
     return bot_name.length > 0 && sender_name.length > 0 && bot_name === sender_name;
 }
 
+/**
+ * Copy the active bot id into a message before command routing.
+ * @param {object} bot - Mineflayer bot instance.
+ * @param {object} msg - Message object to enrich.
+ * @returns {object} The same message object with bot_id set.
+ */
+function attach_bot_id(bot, msg) {
+    if (!msg || typeof msg !== 'object') {
+        return msg;
+    }
+    msg.bot_id = get_bot_id(bot, msg);
+    return msg;
+}
+
 module.exports = {
     get_prefix,
     get_cancel_command,
@@ -57,4 +78,5 @@ module.exports = {
     parse_command_text,
     is_command_position,
     is_bot_self_message,
+    attach_bot_id,
 };

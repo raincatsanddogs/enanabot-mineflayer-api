@@ -2,110 +2,143 @@
 
 /**
  * @module index
- * @description Mineflayer bootstrap, IPC bridge, and plugin loading entrypoint.
+ * @description Mineflayer bootstrap entrypoint prepared for WebSocket-managed bots.
  */
 
 const mineflayer = require('mineflayer');
-const readline = require('node:readline');
 const config = require('./src/configs/config');
 const { resolveSrv } = require('./src/login/srv');
 const message_handler = require('./src/handler/message/message_handler');
 const command_listener = require('./src/handler/command/command_listener');
-const { trigger_command } = require('./src/handler/command');
 const register_plugins = require('./src/plugins');
-const ipc = require('./src/ipc/ipc_protocol');
-
-const start_args = process.argv.slice(2);
-
-try {
-    if (start_args.length === 0) {
-        console.log('未指定配置文件，默认使用第一个配置');
-    } else if (start_args.length > 0) {
-        if (start_args.length > 5
-            || start_args[0] !== '-p'
-            || isNaN(start_args[1])
-            || start_args[1] <= 0
-            || start_args[2] !== '-s'
-            || isNaN(start_args[3])
-            || start_args[3] <= 0) {
-            console.error('无效的配置参数,参数应为: -p <档案编号> -s <服务器编号>，错误参数如下：');
-            throw new Error(start_args);
-        }
-    }
-} catch (err) {
-    console.error(err.message);
-    process.exit(1);
-}
-
-const profile = (start_args[1] - 1) || 0;
+const { build_bot_scope } = require('./src/utils/bot_context');
 
 /**
- * Main bootstrap routine.
- * @returns {Promise<void>}
+ * Validate legacy CLI arguments without creating a bot.
+ * @param {string[]} start_args - Process arguments after node/script name.
+ * @returns {{ account: number, server: number }} One-based preset identifiers.
  */
-async function main() {
-    const srv_host = await resolveSrv(config.server[profile].url);
-    if (srv_host) {
-        console.log(`SRV record found: ${srv_host.host}:${srv_host.port}`);
-        config.server[profile].url = srv_host.host;
-        config.server[profile].port = srv_host.port;
-    } else {
-        console.log(`No SRV record found for ${config.server[profile].url}, using original host and port.`);
+function parse_start_args(start_args = []) {
+    if (start_args.length === 0) {
+        return { account: 1, server: 1 };
     }
 
-    const bot = mineflayer.createBot({
-        host: config.server[profile].url,
-        port: config.server[profile].port,
-        username: config.account[profile].name,
-        password: config.account[profile].password,
-        auth: config.account[profile].authType,
-        version: config.server[profile].version,
-        authServer: config.skin[profile].authServer,
-        sessionServer: config.skin[profile].sessionServer,
-    });
+    if (start_args.length > 5
+        || start_args[0] !== '-p'
+        || isNaN(start_args[1])
+        || Number(start_args[1]) <= 0
+        || start_args[2] !== '-s'
+        || isNaN(start_args[3])
+        || Number(start_args[3]) <= 0) {
+        throw new Error('无效的配置参数,参数应为: -p <档案编号> -s <服务器编号>');
+    }
 
-    bot.loadPlugin(message_handler);
-    bot.loadPlugin(register_plugins);
-    bot.loadPlugin(command_listener);
+    return {
+        account: Number(start_args[1]),
+        server: Number(start_args[3]),
+    };
+}
 
-    setup_readline_bridge(bot);
-    /*
-    /**
-     * Collect online players and send the list through IPC.
-     *
-    function collect_player_list() {
-        const player_list = [];
+/**
+ * Resolve a one-based preset id to a config array entry.
+ * @param {Array} list - Preset list from YAML config.
+ * @param {number} id - One-based preset identifier.
+ * @param {string} label - Human readable preset label.
+ * @returns {object} Preset config object.
+ */
+function get_preset_entry(list, id, label) {
+    const index = Number(id) - 1;
+    if (!Array.isArray(list) || !Number.isInteger(index) || index < 0 || index >= list.length) {
+        throw new Error(`找不到${label}预设: ${id}`);
+    }
+    return list[index];
+}
 
-        for (const name in bot.players) {
-            const player = bot.players[name];
-            if (!player || player.username === bot.username) {
-                continue;
-            }
+/**
+ * Build login options from YAML presets. This mirrors the future login_preset
+ * handler while keeping index.js independent from the WebSocket layer.
+ * @param {number} account_id - One-based account preset id.
+ * @param {number} server_id - One-based server preset id.
+ * @returns {object} Login options accepted by {@link create_bot}.
+ */
+function build_login_options_from_preset(account_id = 1, server_id = 1) {
+    const account = get_preset_entry(config.account, account_id, '账号');
+    const server = get_preset_entry(config.server, server_id, '服务器');
+    const skin = Array.isArray(config.skin)
+        ? (config.skin[Number(account_id) - 1] || config.skin[0] || {})
+        : {};
+    const reconnect_config = config.reconnect && typeof config.reconnect === 'object'
+        ? config.reconnect
+        : {};
 
-            const skin_url = player.skinData && player.skinData.url
-                ? player.skinData.url
-                : `https://crafatar.com/avatars/${player.uuid}?size=32&overlay`;
+    return {
+        username: account.name,
+        account: account.email || account.account || account.name,
+        password: account.password,
+        login_type: account.authType,
+        server: {
+            host: server.url || server.host,
+            port: server.port || 25565,
+            version: server.version,
+        },
+        skin_server: skin.url || '',
+        skin_auth_server: skin.authServer || '',
+        skin_session_server: skin.sessionServer || '',
+        reconnect: {
+            enabled: reconnect_config.reconnect !== false && reconnect_config.enabled !== false,
+            interval: reconnect_config.interval || 5,
+            max_attempts: reconnect_config.max_attempts || reconnect_config.maxAttempts || 5,
+        },
+    };
+}
 
-            player_list.push({
-                name: player.username,
-                uuid: player.uuid || '',
-                skin_url,
-            });
-        }
+/**
+ * Normalize WebSocket login options to Mineflayer createBot options.
+ * @param {object} login_options - External login options.
+ * @returns {Promise<{ mineflayer_options: object, server: object }>} Mineflayer options and resolved server info.
+ */
+async function build_mineflayer_options(login_options) {
+    const server = login_options.server || {};
+    const original_host = server.host || server.url;
+    if (!original_host) {
+        throw new Error('缺少服务器地址');
+    }
 
-        process.stdout.write(ipc.encode(ipc.ACTION_PLAYER_LIST, {
-            players: player_list,
-            count: player_list.length,
-            timestamp: new Date().toISOString(),
-            bot_username: bot.username,
-        }));
-    }仍有可以借鉴的部分，完成后删除
-    */
+    const resolved_srv = await resolveSrv(original_host);
+    const resolved_server = resolved_srv
+        ? { ...server, host: resolved_srv.host, port: resolved_srv.port }
+        : { ...server, host: original_host, port: server.port || 25565 };
 
-    /*
-     * 处理加入服务器时可能会遇到的资源包请求
-     *
-     */
+    if (resolved_srv) {
+        console.log(`SRV record found: ${resolved_srv.host}:${resolved_srv.port}`);
+    } else {
+        console.log(`No SRV record found for ${original_host}, using original host and port.`);
+    }
+
+    return {
+        server: resolved_server,
+        mineflayer_options: {
+            host: resolved_server.host,
+            port: resolved_server.port,
+            username: login_options.username || login_options.account,
+            password: login_options.password,
+            auth: login_options.login_type === 'third' ? 'mojang' : login_options.login_type,
+            version: resolved_server.version,
+            authServer: login_options.skin_auth_server,
+            sessionServer: login_options.skin_session_server,
+        },
+    };
+}
+
+/**
+ * Install resource-pack auto-accept handlers for one Mineflayer bot.
+ * @param {object} bot - Mineflayer bot instance.
+ */
+function setup_resource_pack_handlers(bot) {
+    if (!bot || !bot._client) {
+        return;
+    }
+
     bot._client.on('add_resource_pack', (packet) => {
         const uuid = packet.uuid || packet.packId || '00000000-0000-0000-0000-000000000000';
         bot._client.write('resource_pack_receive', { uuid, result: 0 });
@@ -113,29 +146,117 @@ async function main() {
             bot._client.write('resource_pack_receive', { uuid, result: 3 });
         }, 30);
     });
+
     bot._client.on('resource_pack_send', () => {
         bot._client.write('resource_pack_receive', { result: 0 });
         setTimeout(() => {
             bot._client.write('resource_pack_receive', { result: 3 });
         }, 300);
     });
+}
+
+/**
+ * Attach lifecycle handlers that update bot context instead of killing the process.
+ * @param {object} bot - Mineflayer bot instance.
+ * @param {object} context - Runtime bot context stored on the bot.
+ */
+function setup_lifecycle_handlers(bot, context) {
+    bot.once('spawn', () => {
+        context.state = 'online';
+        context.spawned_at = Date.now();
+        if (typeof context.on_status === 'function') {
+            context.on_status(context, { state: 'online' });
+        }
+    });
 
     bot.on('death', () => {
         bot.chat('/dback');
-        console.warn('bot died, sent /dback command');
+        console.warn(`[${context.bot_id}] bot died, sent /dback command`);
     });
 
     bot.on('error', (error) => {
-        console.error('Bot error:', error);
+        context.state = 'failed';
+        context.last_error = error;
+        console.error(`[${context.bot_id}] Bot error:`, error);
+        if (typeof context.on_error === 'function') {
+            context.on_error(context, error);
+        }
     });
 
     bot.on('end', (reason) => {
-        console.warn(`Bot disconnected: ${reason}`);
+        context.state = context.state === 'stopping' ? 'stopped' : 'offline';
+        context.last_end_reason = reason;
+        console.warn(`[${context.bot_id}] Bot disconnected: ${reason}`);
+        if (typeof context.on_status === 'function') {
+            context.on_status(context, { state: context.state, reason });
+        }
+    });
+}
+
+/**
+ * Create a Mineflayer bot without binding it to process startup.
+ * @param {object} login_options - Account, server, skin, and reconnect options.
+ * @param {object} [runtime_context] - Runtime metadata and push callbacks.
+ * @returns {Promise<object>} Created Mineflayer bot instance.
+ */
+async function create_bot(login_options, runtime_context = {}) {
+    const { mineflayer_options, server } = await build_mineflayer_options(login_options || {});
+    const bot = mineflayer.createBot(mineflayer_options);
+    const username = mineflayer_options.username || login_options.username || login_options.account;
+    const bot_id = runtime_context.bot_id || `bot_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const context = {
+        ...runtime_context,
+        bot_id,
+        username,
+        state: 'logging_in',
+        server,
+        reconnect: login_options.reconnect || {},
+        created_at: Date.now(),
+    };
+
+    context.scope = runtime_context.scope || build_bot_scope({
+        username,
+        server,
+        bot_id,
+    });
+
+    // The context is intentionally stored on the bot so existing plugin APIs can
+    // remain lightweight while still distinguishing concurrent bot instances.
+    bot.__enanabot_context = context;
+
+    bot.loadPlugin(message_handler);
+    bot.loadPlugin(register_plugins);
+    bot.loadPlugin(command_listener);
+
+    setup_resource_pack_handlers(bot);
+    setup_lifecycle_handlers(bot, context);
+
+    return bot;
+}
+
+/**
+ * Entrypoint used when this file is executed directly.
+ * @returns {Promise<void>}
+ */
+async function main() {
+    const preset = parse_start_args(process.argv.slice(2));
+    const connect = config.connect || {};
+    console.log(`配置预设已加载: account=${preset.account}, server=${preset.server}`);
+    console.log(`WebSocket 服务将在后续实现中监听 ${connect.host || 'localhost'}:${connect.port || '<unset>'}`);
+    console.log('当前入口不会在进程启动时创建 Mineflayer bot。');
+}
+
+if (require.main === module) {
+    main().catch((err) => {
+        console.error(`${err.message || err}`);
         process.exit(1);
     });
 }
 
-main().catch((err) => {
-    console.error(`${err}`);
-    process.exit(1);
-});
+module.exports = {
+    parse_start_args,
+    build_login_options_from_preset,
+    build_mineflayer_options,
+    create_bot,
+    main,
+};

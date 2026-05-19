@@ -19,20 +19,27 @@ const {
 } = require('./utils');
 
 /**
- * @param {mineflayer.Bot} bot // to enable intellisense
+ * Create isolated parser state for one bot instance.
+ * @param {mineflayer.Bot} bot - Mineflayer bot instance.
+ * @returns {{ bot: mineflayer.Bot, player_info_list: player_info[] }} Per-bot parser state.
  */
-
-let _bot = null; // 模块级 bot 引用，在 module.exports 中赋值
-
-let player_info_list = []; //存储玩家信息的数组，元素为player_info对象
+function create_message_context(bot) {
+    return {
+        bot,
+        player_info_list: [],
+    };
+}
 
 /**
  * 根据 username 或昵称从 player_info_list / bot.players 中解析 player_info
+ * @param {{ bot: mineflayer.Bot, player_info_list: player_info[] }} context - Per-bot parser state.
  * @param {string} name - username 或昵称纯文本
  * @param {Array|null} nickname_nodes - 可选，消息中提取的格式化昵称节点
  * @returns {player_info}
  */
-function _resolve_player_info(name, nickname_nodes) {
+function _resolve_player_info(context, name, nickname_nodes) {
+    const bot = context.bot;
+    const player_info_list = context.player_info_list;
     if (!name && (!nickname_nodes || nickname_nodes.length === 0)) {
         return new player_info('', '', {});
     }
@@ -45,15 +52,15 @@ function _resolve_player_info(name, nickname_nodes) {
     }
 
     // 2. bot.players 按 username key 直接查找
-    if (name && _bot && _bot.players && _bot.players[name]) {
-        const p = _bot.players[name];
+    if (name && bot && bot.players && bot.players[name]) {
+        const p = bot.players[name];
         return new player_info(p.username, p.uuid || '', get_display_name_nodes(p));
     }
 
     // 3. 格式化节点比对（最精准，解决同名不同色问题）
-    if (nickname_nodes && nickname_nodes.length > 0 && _bot && _bot.players) {
-        for (const p_key in _bot.players) {
-            const p = _bot.players[p_key];
+    if (nickname_nodes && nickname_nodes.length > 0 && bot && bot.players) {
+        for (const p_key in bot.players) {
+            const p = bot.players[p_key];
             const dn_nodes = get_display_name_nodes(p);
             if (dn_nodes.length > 0 && match_formatted_nodes(nickname_nodes, dn_nodes)) {
                 return new player_info(p.username, p.uuid || '', dn_nodes);
@@ -62,16 +69,16 @@ function _resolve_player_info(name, nickname_nodes) {
     }
 
     // 4. 纯文本 displayName 比对（兜底）
-    if (name && _bot && _bot.players) {
-        for (const p_key in _bot.players) {
-            const p = _bot.players[p_key];
+    if (name && bot && bot.players) {
+        for (const p_key in bot.players) {
+            const p = bot.players[p_key];
             const display_text = get_display_name_text(p);
             if (display_text && display_text === name) {
                 return new player_info(p.username, p.uuid || '', get_display_name_nodes(p));
             }
         }
-        for (const p_key in _bot.players) {
-            const p = _bot.players[p_key];
+        for (const p_key in bot.players) {
+            const p = bot.players[p_key];
             const display_text = get_display_name_text(p);
             if (display_text && (display_text.startsWith(name) || name.startsWith(display_text))) {
                 return new player_info(p.username, p.uuid || '', get_display_name_nodes(p));
@@ -86,8 +93,11 @@ function _resolve_player_info(name, nickname_nodes) {
 /**传入message事件的jsonMsg，返回一个player_info对象
  * 具体处理方式为：1.若有原版翻译键则为原版消息，直接从hoverEvent中提取玩家信息；
  * 2.若无原版翻译键则为插件消息，尝试从extra中提取玩家信息，使用bot.player获取player信息并进行比对，若失败则返回空字符串
+ * @param {{ bot: mineflayer.Bot, player_info_list: player_info[] }} context - Per-bot parser state.
+ * @param {object} jsonMsg - 原版json格式聊天消息
+ * @returns {player_info|player_info[]}
  */
-function player_info_handler(jsonMsg) {
+function player_info_handler(context, jsonMsg) {
     const players = [];
 
     // === 1. 原版消息解析：有 translate + with 数组 ===
@@ -99,7 +109,7 @@ function player_info_handler(jsonMsg) {
         const names_set = new Set();
         _collect_player_names_from_node(with_arr, names_set);
         for (const name of names_set) {
-            const resolved = _resolve_player_info(name, null);
+            const resolved = _resolve_player_info(context, name, null);
             _merge_player_result(players, resolved, name);
         }
         if (players.length > 0) return _finalize_player_result(players);
@@ -107,7 +117,7 @@ function player_info_handler(jsonMsg) {
 
     // === 2. CMI 插件消息：格式化节点比对优先 ===
     if (nickname_nodes.length > 0) {
-        const resolved = _resolve_player_info(null, nickname_nodes);
+        const resolved = _resolve_player_info(context, null, nickname_nodes);
         _merge_player_result(players, resolved);
         if (players.length > 0) return _finalize_player_result(players);
     }
@@ -125,7 +135,7 @@ function player_info_handler(jsonMsg) {
         for (const pattern of cmd_patterns) {
             const match = cmd.match(pattern);
             if (match) {
-                const resolved = _resolve_player_info(match[1], nickname_nodes);
+                const resolved = _resolve_player_info(context, match[1], nickname_nodes);
                 _merge_player_result(players, resolved, match[1]);
             }
         }
@@ -134,10 +144,11 @@ function player_info_handler(jsonMsg) {
 
     // === 4. 纯文本中查找已知玩家名 ===
     const plain_text = extract_plain_text(jsonMsg);
-    if (_bot && _bot.players && plain_text) {
-        for (const p_name in _bot.players) {
+    const bot = context.bot;
+    if (bot && bot.players && plain_text) {
+        for (const p_name in bot.players) {
             if (plain_text.includes(p_name)) {
-                const resolved = _resolve_player_info(p_name, nickname_nodes);
+                const resolved = _resolve_player_info(context, p_name, nickname_nodes);
                 _merge_player_result(players, resolved, p_name);
             }
         }
@@ -147,12 +158,13 @@ function player_info_handler(jsonMsg) {
 }
 
 /**
+ * @param {{ bot: mineflayer.Bot, player_info_list: player_info[] }} context - Per-bot parser state.
  * @param {object} jsonMsg - 原版json格式聊天消息
  * @returns {chat_msg} - 封装后的chat_msg对象
  * 处理方式：提取消息内容（为聊天、击杀、玩家加入退出、私聊类型）（若有翻译键直接使用翻译键，获得成就需特殊处理，消息需传翻译键的数组）为纯文本，提取消息位置（公屏/私聊），提取玩家信息（调用player_info_handler函数），将玩家信息、消息内容和消息位置封装成一个chat_msg对象并返回
  */
-function chat_msg_handler(jsonMsg) {
-    const player = player_info_handler(jsonMsg);
+function chat_msg_handler(context, jsonMsg) {
+    const player = player_info_handler(context, jsonMsg);
     const plain_text = extract_plain_text(jsonMsg);
     const visible_text = _extract_visible_text(jsonMsg).trim();
     let message = '';
@@ -262,11 +274,12 @@ function parse_tpa_info(commands, plain_text, player) {
 }
 
 /**
+ * @param {{ bot: mineflayer.Bot, player_info_list: player_info[] }} context - Per-bot parser state.
  * @param {object} jsonMsg - 原版json格式聊天消息
  * @returns {chat_msg} - 封装后的chat_msg对象
  * 处理方式：处理与玩家无关的消息（tp消息除外，算作系统信息）提取消息内容为纯文本，（tp消息应有player信息）若有将消息内容和消息位置封装成一个chat_msg对象并返回
  */
-function system_msg_handler(jsonMsg) {
+function system_msg_handler(context, jsonMsg) {
     const plain_text = extract_plain_text(jsonMsg);
     const visible_text = _extract_visible_text(jsonMsg).trim();
     let player = new player_info('', '', {});
@@ -276,7 +289,7 @@ function system_msg_handler(jsonMsg) {
 
     // TPA 消息
     const commands = find_click_commands(jsonMsg);
-    player = player_info_handler(jsonMsg);
+    player = player_info_handler(context, jsonMsg);
     const tpa_info = parse_tpa_info(commands, plain_text, player);
 
     for (const cmd of commands) {
@@ -322,11 +335,12 @@ function system_msg_handler(jsonMsg) {
 }
 
 /**
+ * @param {{ bot: mineflayer.Bot, player_info_list: player_info[] }} context - Per-bot parser state.
  * @param {object} jsonMsg - 原版json格式聊天消息
  * @returns {chat_msg} - 封装后的chat_msg对象
  * 处理方式：判断消息类型（聊天、击杀、玩家加入退出、私聊、系统信息），调用相应的处理函数进行处理并返回处理结果
  */
-function msg_handler(jsonMsg) {
+function msg_handler(context, jsonMsg) {
     const translate = jsonMsg.translate || (jsonMsg.json && jsonMsg.json.translate) || null;
     const plain_text = extract_plain_text(jsonMsg);
 
@@ -339,34 +353,41 @@ function msg_handler(jsonMsg) {
             translate === 'multiplayer.player.left' ||
             translate.startsWith('death.') ||
             translate.startsWith('chat.type.advancement.')) {
-            return chat_msg_handler(jsonMsg);
+            return chat_msg_handler(context, jsonMsg);
         }
-        return system_msg_handler(jsonMsg);
+        return system_msg_handler(context, jsonMsg);
     }
 
     // === 2. 无 translate（CMI 插件） ===
     const commands = find_click_commands(jsonMsg);
     for (const cmd of commands) {
         if (/^\/(?:(?:cmi\s+)?tp(?:accept|deny|a|ahere|yes)|tpayes|tpyes)\b/i.test(cmd)) {
-            return system_msg_handler(jsonMsg);
+            return system_msg_handler(context, jsonMsg);
         }
     }
 
-    if (plain_text.match(/\[.*->\s*(我|me|\S+)\s*\]/i)) return chat_msg_handler(jsonMsg);
-    if (plain_text.match(/^<.*>\s/)) return chat_msg_handler(jsonMsg);
+    if (plain_text.match(/\[.*->\s*(我|me|\S+)\s*\]/i)) return chat_msg_handler(context, jsonMsg);
+    if (plain_text.match(/^<.*>\s/)) return chat_msg_handler(context, jsonMsg);
 
     for (const cmd of commands) {
-        if (cmd.match(/^\/msg\s+\S+\s*$/)) return chat_msg_handler(jsonMsg);
+        if (cmd.match(/^\/msg\s+\S+\s*$/)) return chat_msg_handler(context, jsonMsg);
     }
 
-    return system_msg_handler(jsonMsg);
+    return system_msg_handler(context, jsonMsg);
 }
 
-function player_info_update_handler(player) {//处理方式：提取玩家的username、uuid和nickname（若有）封装成一个player_info对象并更新player_info数组
+/**
+ * Update the per-bot player cache from Mineflayer player events.
+ * @param {{ bot: mineflayer.Bot, player_info_list: player_info[] }} context - Per-bot parser state.
+ * @param {object} player - Mineflayer player object.
+ * @returns {player_info} Normalized player info.
+ */
+function player_info_update_handler(context, player) {
     const username = player.username || '';
     const uuid = player.uuid || '';
     const nickname = get_display_name_nodes(player);
     const info = new player_info(username, uuid, nickname);
+    const player_info_list = context.player_info_list;
 
     let found = false;
     for (let i = 0; i < player_info_list.length; i++) {
@@ -380,19 +401,29 @@ function player_info_update_handler(player) {//处理方式：提取玩家的use
     return info;
 }
 
+/**
+ * Mineflayer plugin entry that installs an isolated parser for one bot.
+ * @param {mineflayer.Bot} bot - Mineflayer bot instance.
+ */
 module.exports = bot => {
-    _bot = bot;
+    const context = create_message_context(bot);
+
     bot.on('message', (jsonMsg) => {
-        bot.emit('msg_obj', msg_handler(jsonMsg));
+        const parsed = msg_handler(context, jsonMsg);
+        parsed.bot_id = bot.__enanabot_context && bot.__enanabot_context.bot_id;
+        bot.emit('msg_obj', parsed);
     });
     bot.on('playerUpdated', (player) => {
-        player_info_update_handler(player);
+        player_info_update_handler(context, player);
     });
     bot.on('playerJoined', (player) => {
-        player_info_update_handler(player);
+        player_info_update_handler(context, player);
     });
     bot.on('playerLeft', (player) => {
         const username = player.username || '';
-        player_info_list = player_info_list.filter(p => p.username !== username);
+        context.player_info_list = context.player_info_list.filter(p => p.username !== username);
     });
 }
+// 导出处理函数以供测试
+module.exports.create_message_context = create_message_context;
+module.exports.msg_handler = msg_handler;
