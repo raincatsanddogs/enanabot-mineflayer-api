@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "此项目以JavaScript编写，基于mineflayer，可以做到：读取账号信息，进行登录，发送服务器消息至console以供解析",
   "keywords": [],
-  "license": "ISC",
+  "license": "MIT",
   "author": "",
   "type": "commonjs",
   "main": "index.js",
