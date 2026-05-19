@@ -4,6 +4,7 @@
  */
 
 const { on_command } = require('../../handler/command');
+const { get_bot_scope } = require('../../utils/bot_context');
 const wordle_state = require('../wordle/wordle_state');
 
 let loaded = false;
@@ -23,7 +24,7 @@ module.exports = function guess_plugin() {
     });
 
     guess_command.handle(async (session) => {
-        const result = wordle_state.guess_word(session.args[0]);
+        const result = wordle_state.guess_word(session.args[0], get_bot_scope(session.bot));
         for (const message of result.messages) {
             await session.send(message, { channel: 'public' });
         }

@@ -4,6 +4,7 @@
  */
 
 const { on_command } = require('../../handler/command');
+const { get_bot_scope } = require('../../utils/bot_context');
 const wordle_state = require('../wordle/wordle_state');
 
 let loaded = false;
@@ -23,6 +24,6 @@ module.exports = function hint_plugin() {
     });
 
     hint_command.handle(async (session) => {
-        await session.send(wordle_state.get_hint(), { channel: 'public' });
+        await session.send(wordle_state.get_hint(get_bot_scope(session.bot)), { channel: 'public' });
     });
 };

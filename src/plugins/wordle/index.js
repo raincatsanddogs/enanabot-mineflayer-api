@@ -4,6 +4,7 @@
  */
 
 const { on_command } = require('../../handler/command');
+const { get_bot_scope } = require('../../utils/bot_context');
 const wordle_state = require('./wordle_state');
 
 let loaded = false;
@@ -35,14 +36,15 @@ module.exports = function wordle_plugin() {
     });
 
     wordle_command.handle(async (session) => {
+        const scope = get_bot_scope(session.bot);
         const sub = String(session.args[0] || '').toLowerCase();
         if (sub === 'start') {
-            await send_wordle_public(session, wordle_state.start_game().message);
+            await send_wordle_public(session, wordle_state.start_game(scope).message);
             return;
         }
 
         if (sub === 'stop') {
-            await send_wordle_public(session, wordle_state.stop_game().message);
+            await send_wordle_public(session, wordle_state.stop_game(scope).message);
             return;
         }
 

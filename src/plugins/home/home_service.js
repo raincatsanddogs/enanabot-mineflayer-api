@@ -6,6 +6,7 @@
 const home_cache = require('../../utils/home_cache');
 const { list_homes } = require('../../utils/container_utils');
 const { stringify_error } = require('../../utils/error_utils');
+const { get_bot_scope } = require('../../utils/bot_context');
 
 /**
  * Execute a home operation and update cache when needed.
@@ -15,11 +16,12 @@ const { stringify_error } = require('../../utils/error_utils');
  * @returns {Promise<{ success: boolean, result?: unknown, error?: string }>}
  */
 async function execute_home_operation(bot, command, name) {
+    const scope = get_bot_scope(bot);
     if (command === 'list') {
-        if (home_cache.needs_refresh()) {
+        if (home_cache.needs_refresh(scope)) {
             try {
                 const homes = await list_homes(bot);
-                home_cache.set_from_gui(homes);
+                home_cache.set_from_gui(homes, scope);
             } catch (err) {
                 return {
                     success: false,
@@ -29,7 +31,7 @@ async function execute_home_operation(bot, command, name) {
         }
         return {
             success: true,
-            result: home_cache.get_list(),
+            result: home_cache.get_list(scope),
         };
     }
 
@@ -46,7 +48,7 @@ async function execute_home_operation(bot, command, name) {
             return { success: false, error: '缺少 home 名称' };
         }
         bot.chat(`/sethome ${name}`);
-        home_cache.add_home(name);
+        home_cache.add_home(name, scope);
         return { success: true, result: name };
     }
 
@@ -55,7 +57,7 @@ async function execute_home_operation(bot, command, name) {
             return { success: false, error: '缺少 home 名称' };
         }
         bot.chat(`/removehome ${name}`);
-        home_cache.remove_home(name);
+        home_cache.remove_home(name, scope);
         return { success: true, result: name };
     }
 

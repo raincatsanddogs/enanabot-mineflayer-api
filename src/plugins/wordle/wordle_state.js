@@ -1,32 +1,69 @@
 /**
  * @module wordle_state
- * @description Shared state and word list helpers for Wordle commands.
+ * @description Shared word list helpers and scoped Wordle game state.
  */
 
 const fs = require('fs');
 const path = require('path');
+const { sanitize_scope_part } = require('../../utils/bot_context');
 
 const WORDLE_LIST_DIR = path.join(__dirname, 'wordle_list');
 const TARGET_WORD_FILE = path.join(WORDLE_LIST_DIR, 'filtered-wordle-words.txt');
 const GUESS_WORD_FILE = path.join(WORDLE_LIST_DIR, 'words.txt');
 const MAX_ATTEMPTS = 6;
 const WORD_LENGTH = 5;
+const DEFAULT_SCOPE = 'default';
 
-let game_active = false;
-let target_word = '';
-let attempts = 0;
 let target_words = [];
 let guess_words = [];
 let guess_word_set = new Set();
-let wordle_status = [];
+
+/** @type {Map<string, { game_active: boolean, target_word: string, attempts: number, wordle_status: Array }>} */
+const games = new Map();
 
 /**
- * Reset visible guess status rows.
+ * Normalize a bot scope for the game-state map.
+ * @param {string} scope - Raw bot scope.
+ * @returns {string} Normalized scope.
  */
-function reset_wordle_status() {
-    wordle_status = Array.from({ length: MAX_ATTEMPTS }, () => (
+function normalize_scope(scope = DEFAULT_SCOPE) {
+    return sanitize_scope_part(scope || DEFAULT_SCOPE);
+}
+
+/**
+ * Create empty visible guess status rows.
+ * @returns {Array} Wordle status rows.
+ */
+function create_empty_status() {
+    return Array.from({ length: MAX_ATTEMPTS }, () => (
         Array.from({ length: WORD_LENGTH }, () => ({ letter: '', status: '' }))
     ));
+}
+
+/**
+ * Get or create the game state for one bot scope.
+ * @param {string} scope - Bot scope.
+ * @returns {{ game_active: boolean, target_word: string, attempts: number, wordle_status: Array }}
+ */
+function get_game(scope = DEFAULT_SCOPE) {
+    const normalized = normalize_scope(scope);
+    if (!games.has(normalized)) {
+        games.set(normalized, {
+            game_active: false,
+            target_word: '',
+            attempts: 0,
+            wordle_status: create_empty_status(),
+        });
+    }
+    return games.get(normalized);
+}
+
+/**
+ * Reset visible guess status rows for one bot scope.
+ * @param {string} [scope='default'] - Bot scope.
+ */
+function reset_wordle_status(scope = DEFAULT_SCOPE) {
+    get_game(scope).wordle_status = create_empty_status();
 }
 
 /**
@@ -49,15 +86,14 @@ function read_word_list() {
 }
 
 /**
- * Ensure word lists and status are initialized.
+ * Ensure word lists and scoped status are initialized.
+ * @param {string} [scope='default'] - Bot scope.
  */
-function ensure_initialized() {
+function ensure_initialized(scope = DEFAULT_SCOPE) {
     if (target_words.length === 0 || guess_words.length === 0) {
         read_word_list();
     }
-    if (wordle_status.length === 0) {
-        reset_wordle_status();
-    }
+    get_game(scope);
 }
 
 /**
@@ -72,21 +108,23 @@ function get_random_integer(min, max) {
 
 /**
  * Start a new game if none is active.
+ * @param {string} [scope='default'] - Bot scope.
  * @returns {{ ok: boolean, message: string }}
  */
-function start_game() {
-    ensure_initialized();
-    if (game_active) {
+function start_game(scope = DEFAULT_SCOPE) {
+    ensure_initialized(scope);
+    const game = get_game(scope);
+    if (game.game_active) {
         return {
             ok: false,
             message: '已有进行中的wordle，输入#wordle stop可结束当前游戏',
         };
     }
 
-    game_active = true;
-    target_word = target_words[get_random_integer(0, target_words.length)];
-    attempts = 0;
-    reset_wordle_status();
+    game.game_active = true;
+    game.target_word = target_words[get_random_integer(0, target_words.length)];
+    game.attempts = 0;
+    reset_wordle_status(scope);
     return {
         ok: true,
         message: 'wordle已开始，输入#guess <五字母单词>开始猜词',
@@ -95,18 +133,20 @@ function start_game() {
 
 /**
  * Stop the current game.
+ * @param {string} [scope='default'] - Bot scope.
  * @returns {{ ok: boolean, message: string }}
  */
-function stop_game() {
-    if (!game_active) {
+function stop_game(scope = DEFAULT_SCOPE) {
+    const game = get_game(scope);
+    if (!game.game_active) {
         return {
             ok: false,
             message: '当前没有正在进行中的wordle',
         };
     }
 
-    const answer = target_word;
-    game_active = false;
+    const answer = game.target_word;
+    game.game_active = false;
     return {
         ok: true,
         message: `已结束当前wordle，答案是${answer}`,
@@ -116,23 +156,25 @@ function stop_game() {
 /**
  * Score a guess against the target word.
  * @param {string} guess_word - Guess word.
+ * @param {string} [scope='default'] - Bot scope.
  * @returns {{ ok: boolean, messages: string[] }}
  */
-function guess_word(guess_word) {
-    ensure_initialized();
+function guess_word(guess_word, scope = DEFAULT_SCOPE) {
+    ensure_initialized(scope);
+    const game = get_game(scope);
 
-    if (!game_active) {
+    if (!game.game_active) {
         return {
             ok: false,
             messages: ['没有正在进行中的wordle,请输入#wordle start开始游戏'],
         };
     }
 
-    if (attempts >= MAX_ATTEMPTS) {
-        game_active = false;
+    if (game.attempts >= MAX_ATTEMPTS) {
+        game.game_active = false;
         return {
             ok: false,
-            messages: [`游戏结束！正确单词是${target_word}`],
+            messages: [`游戏结束！正确单词是${game.target_word}`],
         };
     }
 
@@ -157,11 +199,11 @@ function guess_word(guess_word) {
     }
 
     const guess_word_list = [...normalized_guess];
-    const target_word_list = [...target_word];
+    const target_word_list = [...game.target_word];
 
     for (let index = 0; index < target_word_list.length; index++) {
         if (guess_word_list[index] === target_word_list[index]) {
-            wordle_status[attempts][index] = {
+            game.wordle_status[game.attempts][index] = {
                 letter: guess_word_list[index],
                 status: 'correct',
             };
@@ -170,48 +212,50 @@ function guess_word(guess_word) {
     }
 
     for (let index = 0; index < target_word_list.length; index++) {
-        if (wordle_status[attempts][index].status === 'correct') {
+        if (game.wordle_status[game.attempts][index].status === 'correct') {
             continue;
         }
         const target_index = target_word_list.indexOf(guess_word_list[index]);
         if (target_index !== -1) {
-            wordle_status[attempts][index] = {
+            game.wordle_status[game.attempts][index] = {
                 letter: guess_word_list[index],
                 status: 'misplace',
             };
             target_word_list[target_index] = null;
         } else {
-            wordle_status[attempts][index] = {
+            game.wordle_status[game.attempts][index] = {
                 letter: guess_word_list[index],
                 status: 'incorrect',
             };
         }
     }
 
-    const messages = format_status_rows();
-    if (normalized_guess === target_word) {
-        messages.push(`恭喜你猜对了！正确单词是${target_word}`);
-        game_active = false;
+    const messages = format_status_rows(scope);
+    if (normalized_guess === game.target_word) {
+        messages.push(`恭喜你猜对了！正确单词是${game.target_word}`);
+        game.game_active = false;
         return { ok: true, messages };
     }
 
-    if (attempts >= MAX_ATTEMPTS - 1) {
-        messages.push(`游戏结束！正确单词是${target_word}`);
-        game_active = false;
+    if (game.attempts >= MAX_ATTEMPTS - 1) {
+        messages.push(`游戏结束！正确单词是${game.target_word}`);
+        game.game_active = false;
         return { ok: true, messages };
     }
 
-    attempts++;
+    game.attempts++;
     return { ok: true, messages };
 }
 
 /**
  * Format non-empty Wordle status rows.
+ * @param {string} [scope='default'] - Bot scope.
  * @returns {string[]} Formatted rows using Minecraft color codes.
  */
-function format_status_rows() {
+function format_status_rows(scope = DEFAULT_SCOPE) {
+    const game = get_game(scope);
     const messages = [];
-    for (const row of wordle_status) {
+    for (const row of game.wordle_status) {
         let turn_result = '';
         for (const cell of row) {
             if (!cell.letter) {
@@ -234,13 +278,15 @@ function format_status_rows() {
 
 /**
  * Get a hint message for current game state.
+ * @param {string} [scope='default'] - Bot scope.
  * @returns {string} Hint text.
  */
-function get_hint() {
-    if (!game_active) {
+function get_hint(scope = DEFAULT_SCOPE) {
+    const game = get_game(scope);
+    if (!game.game_active) {
         return '没有正在进行中的wordle,请输入#wordle start开始游戏';
     }
-    if (attempts === 0) {
+    if (game.attempts === 0) {
         return '你还没有进行过猜词，无法获取提示';
     }
     return '提示功能先鸽着（';

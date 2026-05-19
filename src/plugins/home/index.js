@@ -10,30 +10,38 @@ const {
     format_home_result_message,
     is_home_related_message,
 } = require('./home_service');
+const { get_bot_scope } = require('../../utils/bot_context');
 
-let loaded = false;
+let commands_registered = false;
+const attached_bots = new WeakSet();
 
 /**
  * Register the home command and home GUI suppression hook.
  * @param {object} bot - mineflayer bot instance.
  */
 module.exports = function home_plugin(bot) {
-    if (loaded) {
+    const scope = get_bot_scope(bot);
+    home_cache.load(scope);
+
+    // The GUI-suppression listener is tied to one bot's message stream.
+    if (!attached_bots.has(bot)) {
+        attached_bots.add(bot);
+
+        const add_listener = typeof bot.prependListener === 'function'
+            ? bot.prependListener.bind(bot)
+            : bot.on.bind(bot);
+
+        add_listener('msg_obj', (msg) => {
+            if (home_cache.needs_refresh(scope) && is_home_related_message(msg)) {
+                msg.suppress_forward = true;
+            }
+        });
+    }
+
+    if (commands_registered) {
         return;
     }
-    loaded = true;
-
-    home_cache.load();
-
-    const add_listener = typeof bot.prependListener === 'function'
-        ? bot.prependListener.bind(bot)
-        : bot.on.bind(bot);
-
-    add_listener('msg_obj', (msg) => {
-        if (home_cache.needs_refresh() && is_home_related_message(msg)) {
-            msg.suppress_forward = true;
-        }
-    });
+    commands_registered = true;
 
     const home_command = on_command('home', {
         permission: 'guest',

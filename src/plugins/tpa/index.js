@@ -3,11 +3,11 @@
  * @description TPA command and auto-accept plugin.
  */
 
-const ipc = require('../../ipc/ipc_protocol');
 const { on_command } = require('../../handler/command');
 const { normalize_player_name } = require('../../handler/command/utils/permission_utils');
 const home_cache = require('../../utils/home_cache');
 const { stringify_error } = require('../../utils/error_utils');
+const { get_bot_context, get_bot_scope } = require('../../utils/bot_context');
 const tpa_state = require('./tpa_state');
 
 const TPA_BACKUP_HOME = 'tpabackup';
@@ -15,7 +15,8 @@ const TPA_ACCEPT_DELAY_MS = 1000;
 const TPA_BACK_WAIT_MS = 1500;
 const TPA_BACK_SETTLE_MS = 300;
 
-let loaded = false;
+let commands_registered = false;
+const attached_bots = new WeakSet();
 
 /**
  * Delay execution for a number of milliseconds.
@@ -27,20 +28,27 @@ function delay(ms) {
 }
 
 /**
- * Send a TPA IPC notification.
- * @param {string} action - IPC action.
- * @param {object} data - IPC payload.
+ * Send a TPA event through the bot runtime context.
+ * @param {object} bot - Mineflayer bot instance.
+ * @param {string} event_type - WebSocket event type.
+ * @param {object} event_data - Event payload.
  */
-function send_tpa_ipc(action, data) {
-    process.stdout.write(ipc.encode(action, data));
+function send_tpa_event(bot, event_type, event_data) {
+    const context = get_bot_context(bot);
+    if (typeof context.push_event === 'function') {
+        context.push_event(event_type, event_data, { bot, context });
+        return;
+    }
+    console.log(`[tpa:${event_type}] ${JSON.stringify(event_data)}`);
 }
 
 /**
  * Format current TPA state for chat output.
+ * @param {string} scope - Bot state scope.
  * @returns {string} State text.
  */
-function format_tpa_status() {
-    const state = tpa_state.get_state();
+function format_tpa_status(scope) {
+    const state = tpa_state.get_state(scope);
     const enabled_text = state.enabled ? '开启' : '关闭';
     const occupied_text = state.occupied
         ? `是（${state.occupied_by || '未知'}）`
@@ -51,10 +59,11 @@ function format_tpa_status() {
 /**
  * Execute the TPA back workflow and release the occupied lock.
  * @param {object} bot - mineflayer bot instance.
+ * @param {string} [scope] - Bot state scope.
  * @returns {Promise<string>} Result text.
  */
-async function execute_tpa_back(bot) {
-    const state = tpa_state.get_state();
+async function execute_tpa_back(bot, scope = get_bot_scope(bot)) {
+    const state = tpa_state.get_state(scope);
     if (!state.occupied) {
         return '当前没有占用，无需返回';
     }
@@ -77,8 +86,8 @@ async function execute_tpa_back(bot) {
     });
 
     bot.chat(`/removehome ${TPA_BACKUP_HOME}`);
-    home_cache.remove_home(TPA_BACKUP_HOME);
-    tpa_state.release();
+    home_cache.remove_home(TPA_BACKUP_HOME, scope);
+    tpa_state.release(scope);
 
     return '已返回原位置';
 }
@@ -87,37 +96,38 @@ async function execute_tpa_back(bot) {
  * Handle one TPA auto-accept request.
  * @param {object} bot - mineflayer bot instance.
  * @param {{ requester?: string, tpa_type?: string, accept_command?: string }} tpa_info - TPA info.
+ * @param {string} scope - Bot state scope.
  * @returns {Promise<void>}
  */
-async function handle_tpa_auto_accept(bot, tpa_info) {
+async function handle_tpa_auto_accept(bot, tpa_info, scope) {
     const requester = tpa_info.requester || '未知';
     const tpa_type = tpa_info.tpa_type || 'tpa';
     const accept_command = tpa_info.accept_command;
 
     if (!accept_command) {
-        send_tpa_ipc(ipc.ACTION_TPA_NOTIFICATION, {
-            msg: `TPA 自动接受失败: 缺少接受指令 (${requester})`,
+        send_tpa_event(bot, 'tpa.notification', {
+            message: `TPA 自动接受失败: 缺少接受指令 (${requester})`,
         });
         return;
     }
 
-    tpa_state.occupy(requester);
+    tpa_state.occupy(requester, scope);
     bot.chat(`/sethome ${TPA_BACKUP_HOME}`);
-    home_cache.add_home(TPA_BACKUP_HOME);
+    home_cache.add_home(TPA_BACKUP_HOME, scope);
 
     try {
         await delay(TPA_ACCEPT_DELAY_MS);
         bot.chat(accept_command);
 
-        send_tpa_ipc(ipc.ACTION_TPA_NOTIFICATION, {
-            msg: `TPA 自动接受: ${requester} (${tpa_type})`,
+        send_tpa_event(bot, 'tpa.notification', {
+            message: `TPA 自动接受: ${requester} (${tpa_type})`,
         });
         console.log(`TPA auto-accepted: ${requester} (${tpa_type})`);
     } catch (err) {
-        tpa_state.release();
+        tpa_state.release(scope);
         console.error(`TPA auto-accept failed: ${err.message || err}`);
-        send_tpa_ipc(ipc.ACTION_TPA_NOTIFICATION, {
-            msg: `TPA 自动接受失败: ${stringify_error(err)}`,
+        send_tpa_event(bot, 'tpa.notification', {
+            message: `TPA 自动接受失败: ${stringify_error(err)}`,
         });
     }
 }
@@ -137,10 +147,11 @@ function handle_tpa_message(bot, msg) {
 
     const tpa_info = (msg.data && msg.data.tpa_info) || {};
     const requester = tpa_info.requester || (msg.player && msg.player.username) || '';
-    const state = tpa_state.get_state();
+    const scope = get_bot_scope(bot);
+    const state = tpa_state.get_state(scope);
 
     if (!state.enabled) {
-        send_tpa_ipc(ipc.ACTION_TPA_REQUEST_DETECTED, {
+        send_tpa_event(bot, 'tpa.request_detected', {
             requester,
             type: tpa_info.tpa_type || 'tpa',
             auto_accepted: false,
@@ -149,8 +160,8 @@ function handle_tpa_message(bot, msg) {
     }
 
     if (state.occupied) {
-        send_tpa_ipc(ipc.ACTION_TPA_NOTIFICATION, {
-            msg: `TPA 请求被拒绝（当前被 ${state.occupied_by || '未知'} 占用）: ${requester || '未知'}`,
+        send_tpa_event(bot, 'tpa.notification', {
+            message: `TPA 请求被拒绝（当前被 ${state.occupied_by || '未知'} 占用）: ${requester || '未知'}`,
         });
         return;
     }
@@ -158,7 +169,7 @@ function handle_tpa_message(bot, msg) {
     handle_tpa_auto_accept(bot, {
         ...tpa_info,
         requester,
-    });
+    }, scope);
 }
 
 /**
@@ -166,19 +177,24 @@ function handle_tpa_message(bot, msg) {
  * @param {object} bot - mineflayer bot instance.
  */
 module.exports = function tpa_plugin(bot) {
-    if (loaded) {
+    const scope = get_bot_scope(bot);
+    tpa_state.load(scope);
+    home_cache.load(scope);
+
+    // Listeners are per bot, while command definitions are process-global.
+    if (!attached_bots.has(bot)) {
+        attached_bots.add(bot);
+        const add_listener = typeof bot.prependListener === 'function'
+            ? bot.prependListener.bind(bot)
+            : bot.on.bind(bot);
+
+        add_listener('msg_obj', (msg) => handle_tpa_message(bot, msg));
+    }
+
+    if (commands_registered) {
         return;
     }
-    loaded = true;
-
-    tpa_state.load();
-    home_cache.load();
-
-    const add_listener = typeof bot.prependListener === 'function'
-        ? bot.prependListener.bind(bot)
-        : bot.on.bind(bot);
-
-    add_listener('msg_obj', (msg) => handle_tpa_message(bot, msg));
+    commands_registered = true;
 
     const tpa_command = on_command('tpa', {
         permission: 'guest',
@@ -186,18 +202,19 @@ module.exports = function tpa_plugin(bot) {
     });
 
     tpa_command.handle(async (session) => {
+        const session_scope = get_bot_scope(session.bot);
         const sub = String(session.args[0] || 'status').toLowerCase();
-        const state = tpa_state.get_state();
+        const state = tpa_state.get_state(session_scope);
 
         if (sub === 'status') {
-            await session.finish(format_tpa_status());
+            await session.finish(format_tpa_status(session_scope));
         }
 
         if (sub === 'on') {
             if (session.permission !== 'admin' && session.permission !== 'system') {
                 await session.finish('权限不足：需要管理员权限');
             }
-            tpa_state.set_enabled(true);
+            tpa_state.set_enabled(true, session_scope);
             await session.finish('TPA 自动接受已开启');
         }
 
@@ -207,12 +224,12 @@ module.exports = function tpa_plugin(bot) {
             }
             if (state.occupied) {
                 try {
-                    await execute_tpa_back(session.bot);
+                    await execute_tpa_back(session.bot, session_scope);
                 } catch (err) {
                     await session.finish(`关闭失败: ${stringify_error(err)}`);
                 }
             }
-            tpa_state.reset();
+            tpa_state.reset(session_scope);
             await session.finish('TPA 自动接受已关闭');
         }
 
@@ -231,7 +248,7 @@ module.exports = function tpa_plugin(bot) {
 
             let result = '';
             try {
-                result = await execute_tpa_back(session.bot);
+                result = await execute_tpa_back(session.bot, session_scope);
             } catch (err) {
                 await session.finish(`返回失败: ${stringify_error(err)}`);
             }
