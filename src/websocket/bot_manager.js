@@ -10,6 +10,7 @@ const {
     build_reply,
     create_protocol_error,
     get_timeout_ms,
+is_self_message,
     normalize_reconnect_options,
     wait_for_bot_login,
 } = require('./utils');
@@ -205,7 +206,7 @@ class BotManager {
 
     _attach_bot_listeners(entry, bot) {
         bot.on('msg_obj', (msg) => {
-            if (msg && msg.suppress_forward) {
+            if ((msg && msg.suppress_forward) || is_self_message(bot, msg)) {
                 return;
             }
             this.broadcast(build_minecraft_msg(msg, entry.bot_id));
