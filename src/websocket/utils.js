@@ -284,12 +284,10 @@ function normalize_reconnect_options(reconnect, config) {
  * @returns {object} Protocol player payload.
  */
 function format_player(player) {
-    const display_name = player && player.displayName
-        ? (player.displayName.json || player.displayName)
-        : {};
+    const nickname_nodes = get_display_name_nodes(player);
     return {
         username: (player && player.username) || '',
-        nickname: display_name,
+        nickname: nickname_nodes.length > 0 ? nickname_nodes : {},
         uuid: (player && player.uuid) || '',
         skin_url: (player && player.skinData && player.skinData.url) || '',
     };
