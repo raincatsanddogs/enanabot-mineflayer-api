@@ -98,5 +98,13 @@ config.command_prefix = (
   ?? '#'
 ).toString().trim() || '#';
 
+config.enable_ops_commands = (
+  config.enable_ops_commands
+  ?? config.enableOpsCommands
+  ?? connectConfig.enable_ops_commands
+  ?? connectConfig.enableOpsCommands
+  ?? false
+) === true;
+
 // 4. 导出对象
 module.exports = config;

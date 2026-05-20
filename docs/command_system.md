@@ -306,3 +306,24 @@ const { register_builtin_commands } = require('./src/handler/command/command_reg
 
 register_builtin_commands();
 ```
+
+## 运维指令
+
+项目内置 `ops` 运维指令插件，但默认关闭。需要在 `configs/settings.yaml` 的 `connect` 下显式启用：
+
+```yaml
+connect:
+  enable_ops_commands: true
+```
+
+启用后可由 `admin` 或 `system` 权限通过 MC 私聊或 WebSocket internal command 执行：
+
+```txt
+#ops restart
+#ops update
+```
+
+- `#ops restart`：回复提示后延迟约 1 秒退出当前 Node 进程。
+- `#ops update`：先执行 `git status --porcelain`，工作区存在未提交改动时拒绝更新；工作区干净时执行 `git pull --ff-only`，成功后退出当前 Node 进程。
+
+注意：Node 进程无法可靠地“自我重启”。上述指令只会让当前进程正常退出，必须由 PM2、systemd、Docker restart policy 或其他外部守护进程负责重新拉起 `node index.js`。如果没有守护进程，执行后服务会停止，需要手动启动。

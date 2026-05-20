@@ -14,6 +14,7 @@ const plugin_list = [
     require('./wordle'),
     require('./guess'),
     require('./hint'),
+    require('./ops'),
 ];
 
 /**

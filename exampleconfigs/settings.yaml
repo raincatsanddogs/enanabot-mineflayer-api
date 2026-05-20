@@ -20,6 +20,7 @@ connect:
   #  以上列表请填写 MC 玩家名（不是 QQ 号），支持大小写无关匹配
   #  示例：admin_players: ["Mutsumi"]
   #  whisper_command_prefix: "#" MC 私聊指令前缀，如 #mc status
+  #  enable_ops_commands: false 是否启用 #ops restart/update 运维指令，默认关闭；启用前请配置 PM2/systemd/Docker 自动重启
   timeout: 10
   retry: 3
   host: "localhost"
@@ -29,3 +30,4 @@ connect:
   user_players: []
   guest_players: []
   whisper_command_prefix: "#"
+  enable_ops_commands: false

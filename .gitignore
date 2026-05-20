@@ -15,3 +15,4 @@ raw_json_msgs/
 test/
 /postman/
 .*/
+*test*.js

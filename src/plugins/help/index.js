@@ -16,6 +16,7 @@ const HELP_TEXT = {
     send: 'send 指令: 发送任意文本到聊天框。用法: #send <文本>',
     wordle: 'wordle 指令: 玩一个单词猜谜游戏。用法:\n#wordle [start|stop]\n#guess <单词>\n#hint',
     ping: 'ping 指令: 测试指令系统。用法: #ping',
+    ops: 'ops 指令: 管理 Node 进程。\n用法: #ops <restart|update>\nrestart: 退出当前进程并依赖守护进程重启；update: 工作区干净时 git pull --ff-only，成功后重启。',
 };
 
 /**
@@ -35,7 +36,7 @@ module.exports = function help_plugin() {
     help_command.handle(async (session) => {
         const sub = String(session.args[0] || '').toLowerCase();
         if (!sub) {
-            await session.finish('可用指令: tpa, home, echo, help, perm, send, wordle, guess, hint, ping。使用 "#help <指令名>" 查看详情。');
+            await session.finish('可用指令: tpa, home, echo, help, perm, send, wordle, guess, hint, ping, ops。使用 "#help <指令名>" 查看详情。');
         }
 
         await session.finish(HELP_TEXT[sub] || `未知指令: ${sub}`);
