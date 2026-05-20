@@ -139,6 +139,7 @@ msg_1690000000000_abcd
 - `invalid_message`：消息格式非法。
 - `missing_field`：缺少必要字段。
 - `bot_not_found`：找不到指定 bot。
+- `bot_offline`：指定 bot 存在但当前不在线，无法执行需要在线状态的操作。
 - `bot_already_online`：bot 已在线。
 - `login_failed`：登录失败。
 - `command_not_found`：命令不存在。

@@ -162,7 +162,7 @@ function create_handlers(options = {}) {
     function handle_send_message(connection, envelope) {
         require_bot_id(envelope);
         require_data_fields(envelope.data, ['type', 'content']);
-        const entry = bot_manager.get_entry(envelope.bot_id);
+        const entry = bot_manager.require_online_entry(envelope.bot_id);
         const data = envelope.data || {};
 
         try {
@@ -191,7 +191,7 @@ function create_handlers(options = {}) {
     async function handle_command(connection, envelope) {
         require_bot_id(envelope);
         require_data_fields(envelope.data, ['command']);
-        const entry = bot_manager.get_entry(envelope.bot_id);
+        const entry = bot_manager.require_online_entry(envelope.bot_id);
         const data = envelope.data || {};
         const command_text = `${command_prefix}${build_command_text(data.command, data.args || [])}`;
 
@@ -271,7 +271,7 @@ function create_handlers(options = {}) {
      */
     function handle_player(connection, envelope) {
         require_bot_id(envelope);
-        const entry = bot_manager.get_entry(envelope.bot_id);
+        const entry = bot_manager.require_online_entry(envelope.bot_id);
         safe_send(connection, build_reply(envelope, 'success', collect_player_list(entry.bot), envelope.bot_id));
     }
 

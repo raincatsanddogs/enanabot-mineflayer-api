@@ -3,6 +3,8 @@
  * @description Protocol helpers and small utilities for the WebSocket layer.
  */
 
+const { get_display_name_nodes } = require('../handler/message/utils');
+
 /**
  * Create an Error carrying a protocol error code.
  * @param {string} error_type - Stable protocol error code.
@@ -284,15 +286,29 @@ function normalize_reconnect_options(reconnect, config) {
  * @returns {object} Protocol player payload.
  */
 function format_player(player) {
-    const display_name = player && player.displayName
-        ? (player.displayName.json || player.displayName)
-        : {};
+    const nickname_nodes = get_display_name_nodes(player);
     return {
         username: (player && player.username) || '',
-        nickname: display_name,
+        nickname: nickname_nodes.length > 0 ? nickname_nodes : {},
         uuid: (player && player.uuid) || '',
         skin_url: (player && player.skinData && player.skinData.url) || '',
     };
+}
+
+/**
+ * Check whether a parsed message was sent by the current bot itself.
+ * @param {object} bot - Mineflayer bot instance.
+ * @param {object} msg - Parsed msg_obj emitted by message_handler.
+ * @returns {boolean} Whether the message sender is the bot.
+ */
+function is_self_message(bot, msg) {
+    const bot_username = normalize_username(bot && bot.username);
+    if (!bot_username || !msg || !msg.player) {
+        return false;
+    }
+
+    const players = Array.isArray(msg.player) ? msg.player : [msg.player];
+    return players.some((player) => normalize_username(player && player.username) === bot_username);
 }
 
 /**
@@ -359,6 +375,10 @@ function build_command_text(command, args) {
     return suffix ? `${normalized_command} ${suffix}` : normalized_command;
 }
 
+function normalize_username(username) {
+    return String(username || '').trim().toLowerCase();
+}
+
 module.exports = {
     create_protocol_error,
     parse_json_message,
@@ -378,4 +398,5 @@ module.exports = {
     collect_player_list,
     build_minecraft_msg,
     build_command_text,
+    is_self_message,
 };
