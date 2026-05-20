@@ -10,7 +10,7 @@ const {
     build_reply,
     create_protocol_error,
     get_timeout_ms,
-is_self_message,
+    is_self_message,
     normalize_reconnect_options,
     wait_for_bot_login,
 } = require('./utils');
@@ -78,8 +78,7 @@ class BotManager {
             entry.state = 'failed';
             entry.last_error = err;
             this._send_status(entry, { state: 'failed', reason: err.message || String(err) });
-            this._safe_quit(entry.bot);
-            this.bots.delete(bot_id);
+            this._cleanup_bot_entry(entry);
             throw err.error_type ? err : create_protocol_error('login_failed', err.message || String(err));
         }
     }
@@ -96,7 +95,7 @@ class BotManager {
     }
 
     /**
-     * Stop a managed bot without removing its final status from the registry.
+     * Stop a managed bot and remove it from the registry after reporting stopped.
      * @param {string} bot_id - Bot id.
      * @returns {Promise<object>} Public bot info after stop request.
      */
@@ -112,7 +111,9 @@ class BotManager {
         entry.state = 'stopped';
         if (entry.context) entry.context.state = 'stopped';
         this._send_status(entry, { state: 'stopped' });
-        return this.get_info(bot_id);
+        const info = this._format_info(entry);
+        this._cleanup_bot_entry(entry, { quit: false });
+        return info;
     }
 
     /**
@@ -150,10 +151,9 @@ class BotManager {
      * @returns {Promise<void>}
      */
     async shutdown() {
-        for (const entry of this.bots.values()) {
+        for (const entry of Array.from(this.bots.values())) {
             entry.manual_stop = true;
-            this._clear_reconnect_timer(entry);
-            this._safe_quit(entry.bot);
+            this._cleanup_bot_entry(entry);
         }
     }
 
@@ -263,6 +263,7 @@ class BotManager {
                 state: 'disabled',
                 reason,
             }, entry.bot_id));
+            this._cleanup_bot_entry(entry, { quit: false });
             return;
         }
 
@@ -273,6 +274,7 @@ class BotManager {
                 max_attempts: reconnect.max_attempts,
                 reason,
             }, entry.bot_id));
+            this._cleanup_bot_entry(entry, { quit: false });
             return;
         }
 
@@ -323,6 +325,20 @@ class BotManager {
         }
     }
 
+    /**
+     * Require a managed bot to be online before performing live bot operations.
+     * @param {string} bot_id - Bot id.
+     * @returns {object} Managed bot entry.
+     */
+    require_online_entry(bot_id) {
+        const entry = this.get_entry(bot_id);
+        const state = (entry.context && entry.context.state) || entry.state;
+        if (state !== 'online') {
+            throw create_protocol_error('bot_offline', `机器人当前不在线 (当前状态: ${state})`);
+        }
+        return entry;
+    }
+
     _clear_reconnect_timer(entry) {
         if (entry && entry.reconnect_timer) {
             clearTimeout(entry.reconnect_timer);
@@ -338,6 +354,28 @@ class BotManager {
                 this.broadcast(build_error('internal_error', err.message || String(err)));
             }
         }
+    }
+
+    /**
+     * Remove a bot entry and release listeners/timers owned by the manager.
+     * @param {object} entry - Managed bot entry.
+     * @param {object} [options] - Cleanup options.
+     * @param {boolean} [options.quit=true] - Whether to call bot.quit().
+     */
+    _cleanup_bot_entry(entry, options = {}) {
+        if (!entry) return;
+        const quit = options.quit !== false;
+        this._clear_reconnect_timer(entry);
+        entry.manual_stop = true;
+
+        if (entry.bot && typeof entry.bot.removeAllListeners === 'function') {
+            entry.bot.removeAllListeners();
+        }
+        if (quit) {
+            this._safe_quit(entry.bot);
+        }
+
+        this.bots.delete(entry.bot_id);
     }
 }
 
