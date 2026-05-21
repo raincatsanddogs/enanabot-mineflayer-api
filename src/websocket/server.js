@@ -55,6 +55,10 @@ function start_websocket_server(options = {}) {
             }
         },
     });
+
+    // 自动恢复之前已登录/持久化的机器人
+    bot_manager.auto_restore();
+
     const handlers = create_handlers({
         bot_manager,
         token: server_config.token,

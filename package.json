@@ -11,7 +11,7 @@
     "minecraft-bot": "index.js"
   },
   "scripts": {
-    "test": "node test/websocket.test.js && node src/plugins/ops/ops.test.js",
+    "test": "node test/websocket.test.js && node test/ops.test.js",
     "postinstall": "patch-package"
   },
   "dependencies": {

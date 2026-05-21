@@ -45,15 +45,22 @@ class BotManager {
     /**
      * Create a bot from explicit login options and wait until spawn.
      * @param {object} login_options - Login options accepted by create_bot().
+     * @param {string} [bot_id=null] - Optional specific bot ID to reuse (for persistence restore).
+     * @param {object} [preset_info=null] - Optional preset metadata if created via preset.
      * @returns {Promise<object>} Public bot info.
      */
-    async create_from_login_options(login_options) {
-        const bot_id = this._generate_bot_id();
+    async create_from_login_options(login_options, bot_id = null, preset_info = null) {
+        const actual_bot_id = bot_id || this._generate_bot_id();
+        if (this.bots.has(actual_bot_id)) {
+            throw create_protocol_error('bot_already_exists', `机器人 ${actual_bot_id} 已经在运行`);
+        }
+
         const entry = {
-            bot_id,
+            bot_id: actual_bot_id,
             bot: null,
             context: null,
             login_options: login_options || {},
+            preset_info,
             state: 'logging_in',
             created_at: Date.now(),
             reconnect_attempts: 0,
@@ -63,7 +70,7 @@ class BotManager {
             last_error: null,
         };
 
-        this.bots.set(bot_id, entry);
+        this.bots.set(actual_bot_id, entry);
         this._send_status(entry, { state: 'logging_in' });
 
         try {
@@ -73,7 +80,8 @@ class BotManager {
             entry.reconnect_attempts = 0;
             entry.state = 'online';
             if (entry.context) entry.context.state = 'online';
-            return this.get_info(bot_id);
+            this._save_persistence();
+            return this.get_info(actual_bot_id);
         } catch (err) {
             entry.state = 'failed';
             entry.last_error = err;
@@ -87,11 +95,12 @@ class BotManager {
      * Create a bot from configured account/server preset ids.
      * @param {number} account_id - One-based account preset id.
      * @param {number} server_id - One-based server preset id.
+     * @param {string} [bot_id=null] - Optional specific bot ID to reuse (for persistence restore).
      * @returns {Promise<object>} Public bot info.
      */
-    async create_from_preset(account_id, server_id) {
+    async create_from_preset(account_id, server_id, bot_id = null) {
         const login_options = this.build_login_options_from_preset(account_id, server_id);
-        return this.create_from_login_options(login_options);
+        return this.create_from_login_options(login_options, bot_id, { account_id, server_id });
     }
 
     /**
@@ -153,7 +162,7 @@ class BotManager {
     async shutdown() {
         for (const entry of Array.from(this.bots.values())) {
             entry.manual_stop = true;
-            this._cleanup_bot_entry(entry);
+            this._cleanup_bot_entry(entry, { save_persistence: false });
         }
     }
 
@@ -313,6 +322,7 @@ class BotManager {
                 state: 'success',
                 reason,
             }, bot_id));
+            this._save_persistence();
         } catch (err) {
             entry.login_completed = true;
             entry.last_error = err;
@@ -361,6 +371,7 @@ class BotManager {
      * @param {object} entry - Managed bot entry.
      * @param {object} [options] - Cleanup options.
      * @param {boolean} [options.quit=true] - Whether to call bot.quit().
+     * @param {boolean} [options.save_persistence=true] - Whether to update persistence file after deletion.
      */
     _cleanup_bot_entry(entry, options = {}) {
         if (!entry) return;
@@ -376,6 +387,95 @@ class BotManager {
         }
 
         this.bots.delete(entry.bot_id);
+
+        if (options.save_persistence !== false) {
+            this._save_persistence();
+        }
+    }
+
+    /**
+     * Save active bots to the persistence JSON file.
+     * @private
+     */
+    _save_persistence() {
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            const persistence_dir = path.resolve(__dirname, '../../configs');
+            const file_path = path.join(persistence_dir, 'bot_persistence.json');
+
+            const data = {
+                bots: [],
+            };
+
+            for (const entry of this.bots.values()) {
+                // Only persist bots that successfully logged in and are not manually stopped
+                if (entry.login_completed && !entry.manual_stop) {
+                    data.bots.push({
+                        bot_id: entry.bot_id,
+                        type: entry.preset_info ? 'preset' : 'account',
+                        preset_info: entry.preset_info,
+                        login_options: entry.login_options,
+                    });
+                }
+            }
+
+            if (!fs.existsSync(persistence_dir)) {
+                fs.mkdirSync(persistence_dir, { recursive: true });
+            }
+            fs.writeFileSync(file_path, JSON.stringify(data, null, 2), 'utf-8');
+        } catch (err) {
+            console.error('[BotManager] 保存机器人持久化配置失败:', err.message || err);
+        }
+    }
+
+    /**
+     * Load persisted bots on startup and attempt to log them in.
+     * @returns {Promise<void>}
+     */
+    async auto_restore() {
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            const persistence_dir = path.resolve(__dirname, '../../configs');
+            const file_path = path.join(persistence_dir, 'bot_persistence.json');
+
+            if (!fs.existsSync(file_path)) {
+                return;
+            }
+
+            const raw = fs.readFileSync(file_path, 'utf-8');
+            const data = JSON.parse(raw);
+            if (!data || !Array.isArray(data.bots) || data.bots.length === 0) {
+                return;
+            }
+
+            console.log(`[BotManager] 检测到 ${data.bots.length} 个持久化挂载的机器人，开始自动恢复登录...`);
+
+            const promises = data.bots.map(async (bot_data) => {
+                try {
+                    console.log(`[BotManager] 正在自动恢复机器人: ${bot_data.bot_id} (${bot_data.type})`);
+                    if (bot_data.type === 'preset' && bot_data.preset_info) {
+                        const { account_id, server_id } = bot_data.preset_info;
+                        await this.create_from_preset(account_id, server_id, bot_data.bot_id);
+                    } else if (bot_data.type === 'account' && bot_data.login_options) {
+                        await this.create_from_login_options(bot_data.login_options, bot_data.bot_id);
+                    } else {
+                        console.warn(`[BotManager] 忽略格式不正确的持久化数据: ${bot_data.bot_id}`);
+                    }
+                    console.log(`[BotManager] 机器人恢复登录成功: ${bot_data.bot_id}`);
+                } catch (err) {
+                    console.error(`[BotManager] 自动恢复机器人 ${bot_data.bot_id} 失败:`, err.message || err);
+                }
+            });
+
+            // Start in parallel in the background, don't block
+            Promise.allSettled(promises).then(() => {
+                console.log('[BotManager] 机器人自动恢复登录流程结束。');
+            });
+        } catch (err) {
+            console.error('[BotManager] 加载机器人持久化配置失败:', err.message || err);
+        }
     }
 }
 
