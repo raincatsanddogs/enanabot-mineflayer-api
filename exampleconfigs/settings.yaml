@@ -2,10 +2,10 @@ server:
   #这里填你的服务器地址以及配置，多个地址请复制粘贴增加，以下为示例
   #- url: "example.com" 服务器地址
   #  port: 25565 服务器端口，默认为25565
-  #  version: "1.xx.x" 服务器版本，格式为1.xx.x/xx.x/1.xx
+  #  version: "auto" 服务器版本，推荐 auto；也可手动填写 1.xx.x/xx.x/1.xx
   - url: ""
     port: 25565
-    version: "1.xx.x"
+    version: "auto"
 
 connect:
   #这里填你的与外部的连接设置，以下为示例

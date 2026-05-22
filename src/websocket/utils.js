@@ -245,7 +245,12 @@ function wait_for_bot_login(bot, timeout_ms) {
         };
         const on_error = (err) => {
             cleanup();
-            reject(create_protocol_error('login_failed', err && err.message ? err.message : String(err)));
+            const context_error = bot && bot.__enanabot_context && bot.__enanabot_context.last_error;
+            const effective_error = context_error || err;
+            reject(create_protocol_error(
+                'login_failed',
+                effective_error && effective_error.message ? effective_error.message : String(effective_error)
+            ));
         };
         const on_end = (reason) => {
             cleanup();

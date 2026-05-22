@@ -6,6 +6,7 @@
  */
 
 const mineflayer = require('mineflayer');
+const minecraftData = require('minecraft-data');
 const config = require('./src/configs/config');
 const { resolveSrv } = require('./src/login/srv');
 const message_handler = require('./src/handler/message/message_handler');
@@ -94,6 +95,70 @@ function build_login_options_from_preset(account_id = 1, server_id = 1) {
 }
 
 /**
+ * Normalize a configured Minecraft version before passing it to Mineflayer.
+ * Empty values and "auto" intentionally leave version undefined so
+ * minecraft-protocol can ping the server and choose the matching protocol.
+ * @param {string|number|null|undefined} version - Configured version value.
+ * @returns {string|undefined} Mineflayer version option.
+ */
+function normalize_minecraft_version(version) {
+    if (version === undefined || version === null) {
+        return undefined;
+    }
+
+    const normalized = String(version).trim();
+    if (!normalized || normalized.toLowerCase() === 'auto') {
+        return undefined;
+    }
+
+    const version_info = minecraftData.versionsByMinecraftVersion.pc[normalized];
+    const data = minecraftData(normalized);
+    if (!data || (version_info && version_info.version !== data.version.version)) {
+        throw new Error(`不支持的 Minecraft 版本: ${normalized}，请更新依赖或将 version 设为 "auto"`);
+    }
+
+    return normalized;
+}
+
+/**
+ * Add actionable context to common low-level minecraft-protocol parse errors.
+ * @param {Error} error - Original bot error.
+ * @param {object} context - Runtime bot context.
+ * @returns {Error} Original or enriched error.
+ */
+function enrich_bot_error(error, context) {
+    if (!error || typeof error !== 'object') {
+        return error;
+    }
+
+    const message = String(error.message || '');
+    const field = String(error.field || '');
+    const is_metadata_parse_error = field.includes('packet_entity_metadata')
+        || field.includes('entity_metadata')
+        || message.includes('packet_entity_metadata')
+        || message.includes('entityMetadata');
+
+    if (!is_metadata_parse_error || !message.includes('Unexpected buffer end while reading VarInt')) {
+        return error;
+    }
+
+    const configured_version = context && context.server ? context.server.version : undefined;
+    const forced_version = configured_version
+        && String(configured_version).trim()
+        && String(configured_version).trim().toLowerCase() !== 'auto'
+        ? String(configured_version).trim()
+        : '';
+    const hint = forced_version
+        ? `当前强制版本为 ${forced_version}，请确认它和服务器实际协议一致；多版本/代理服务器建议把 version 设为 "auto"。`
+        : '当前使用自动版本检测；如果服务器状态页返回了错误协议，请在配置中显式指定正确版本。';
+
+    const enriched = new Error(`${message}。这通常是 Minecraft 协议版本不匹配导致的实体元数据解析失败。${hint}`);
+    Object.assign(enriched, error);
+    enriched.stack = error.stack;
+    return enriched;
+}
+
+/**
  * Normalize WebSocket login options to Mineflayer createBot options.
  * @param {object} login_options - External login options.
  * @returns {Promise<{ mineflayer_options: object, server: object }>} Mineflayer options and resolved server info.
@@ -124,7 +189,7 @@ async function build_mineflayer_options(login_options) {
             username: login_options.username || login_options.account,
             password: login_options.password,
             auth: login_options.login_type === 'third' ? 'mojang' : login_options.login_type,
-            version: resolved_server.version,
+            version: normalize_minecraft_version(resolved_server.version),
             authServer: login_options.skin_auth_server,
             sessionServer: login_options.skin_session_server,
         },
@@ -176,6 +241,7 @@ function setup_lifecycle_handlers(bot, context) {
     });
 
     bot.on('error', (error) => {
+        error = enrich_bot_error(error, context);
         context.state = 'failed';
         context.last_error = error;
         console.error(`[${context.bot_id}] Bot error:`, error);
@@ -258,6 +324,8 @@ module.exports = {
     parse_start_args,
     build_login_options_from_preset,
     build_mineflayer_options,
+    normalize_minecraft_version,
+    enrich_bot_error,
     create_bot,
     start_websocket_server,
     main,
