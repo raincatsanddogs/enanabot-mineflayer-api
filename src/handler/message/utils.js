@@ -80,8 +80,9 @@ function extract_plain_text(node) {
 function find_click_commands(node) {
     let commands = [];
     if (node === null || node === undefined || typeof node !== 'object') return commands;
-    if (node.click_event && typeof node.click_event.command === 'string') {
-        commands.push(node.click_event.command);
+    const click_event = _get_click_event(node);
+    if (click_event && typeof click_event.command === 'string') {
+        commands.push(click_event.command);
     }
     if (Array.isArray(node.extra)) {
         for (const child of node.extra) {
@@ -348,7 +349,7 @@ function _collect_hover_events(jsonMsg) {
 
     for (const node of sources) {
         if (!node || typeof node !== 'object') continue;
-        const he = node.hover_event || (node.json && node.json.hover_event);
+        const he = _get_hover_event(node);
         if (!he || !he.action) continue;
 
         if (he.action === 'show_item') {
@@ -409,7 +410,12 @@ function _is_probable_username(name) {
 
 function _get_hover_event(node) {
     if (!node || typeof node !== 'object') return null;
-    return node.hover_event || (node.json && node.json.hover_event) || null;
+    return node.hover_event || node.hoverEvent || (node.json && (node.json.hover_event || node.json.hoverEvent)) || null;
+}
+
+function _get_click_event(node) {
+    if (!node || typeof node !== 'object') return null;
+    return node.click_event || node.clickEvent || (node.json && (node.json.click_event || node.json.clickEvent)) || null;
 }
 
 function _collect_translate_keys_from_node(node, keys_set) {
@@ -464,7 +470,7 @@ function _collect_player_names_from_node(node, names_set) {
         names_set.add(hover_event.name);
     }
 
-    const click_event = node.click_event || (node.json && node.json.click_event);
+    const click_event = _get_click_event(node);
     let click_name = '';
     if (click_event && typeof click_event.command === 'string') {
         const match = click_event.command.match(/^\/(?:msg|tell)\s+(\S+)\s*$/i);
