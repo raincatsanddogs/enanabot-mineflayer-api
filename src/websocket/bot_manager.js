@@ -218,6 +218,14 @@ class BotManager {
             if ((msg && msg.suppress_forward) || is_self_message(bot, msg)) {
                 return;
             }
+
+            const allowed = this.config.forward_message_positions;
+            if (allowed && Array.isArray(allowed)) {
+                if (msg && !allowed.includes(msg.position)) {
+                    return;
+                }
+            }
+
             this.broadcast(build_minecraft_msg(msg, entry.bot_id));
         });
     }

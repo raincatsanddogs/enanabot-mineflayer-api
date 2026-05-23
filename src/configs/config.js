@@ -106,5 +106,15 @@ config.enable_ops_commands = (
   ?? false
 ) === true;
 
+config.forward_message_positions = (
+  config.forward_message_positions
+  ?? connectConfig.forward_message_positions
+  ?? connectConfig.forwardMessagePositions
+);
+
+if (config.forward_message_positions && !Array.isArray(config.forward_message_positions)) {
+  config.forward_message_positions = [config.forward_message_positions];
+}
+
 // 4. 导出对象
 module.exports = config;
