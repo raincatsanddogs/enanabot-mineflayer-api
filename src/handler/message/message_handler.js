@@ -17,6 +17,8 @@ const {
     chat_msg,
     player_info
 } = require('./utils');
+const player_cache = require('../../utils/player_cache');
+const { get_bot_scope } = require('../../utils/bot_context');
 
 /**
  * Create isolated parser state for one bot instance.
@@ -24,9 +26,12 @@ const {
  * @returns {{ bot: mineflayer.Bot, player_info_list: player_info[] }} Per-bot parser state.
  */
 function create_message_context(bot) {
+    const scope = get_bot_scope(bot);
+    const cached = player_cache.get_all_cached_players(scope);
+    const player_info_list = cached.map(p => new player_info(p.username, p.uuid, p.nickname));
     return {
         bot,
-        player_info_list: [],
+        player_info_list,
     };
 }
 
@@ -398,6 +403,11 @@ function player_info_update_handler(context, player) {
         }
     }
     if (!found) player_info_list.push(info);
+
+    // 持久化缓存
+    const scope = get_bot_scope(context.bot);
+    player_cache.save_player(scope, info);
+
     return info;
 }
 
