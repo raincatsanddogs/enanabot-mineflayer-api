@@ -23,6 +23,7 @@ connect:
   #  enable_ops_commands: false 是否启用 #ops restart/update 运维指令，默认关闭；启用前请配置 PM2/systemd/Docker 自动重启
   #  git_mirror_from: "https://github.com/" git pull 镜像重写的来源前缀，默认 GitHub
   #  git_mirror_to: "https://ghproxy.com/https://github.com/" git pull 镜像重写的目标前缀，设置后 #ops update 会临时启用
+  #  forward_message_positions: ["public", "system_info"] 仅允许广播的消息位置类型。可选值：public, private, private_outgoing, system_info, system, tpa
   timeout: 10
   retry: 3
   host: "localhost"
@@ -35,3 +36,4 @@ connect:
   enable_ops_commands: false
   git_mirror_from: "https://github.com/"
   git_mirror_to: ""
+  forward_message_positions: ["public", "system_info"]
