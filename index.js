@@ -268,7 +268,6 @@ function setup_lifecycle_handlers(bot, context) {
  */
 async function create_bot(login_options, runtime_context = {}) {
     const { mineflayer_options, server } = await build_mineflayer_options(login_options || {});
-    const bot = mineflayer.createBot(mineflayer_options);
     const username = mineflayer_options.username || login_options.username || login_options.account;
     const bot_id = runtime_context.bot_id || `bot_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const context = {
@@ -287,16 +286,20 @@ async function create_bot(login_options, runtime_context = {}) {
         bot_id,
     });
 
+    const bot = mineflayer.createBot(mineflayer_options);
+
     // The context is intentionally stored on the bot so existing plugin APIs can
     // remain lightweight while still distinguishing concurrent bot instances.
     bot.__enanabot_context = context;
+
+    // Register error and status handlers immediately to catch synchronous/early connection errors
+    setup_lifecycle_handlers(bot, context);
 
     bot.loadPlugin(message_handler);
     bot.loadPlugin(register_plugins);
     bot.loadPlugin(command_listener);
 
     setup_resource_pack_handlers(bot);
-    setup_lifecycle_handlers(bot, context);
 
     return bot;
 }
@@ -314,6 +317,14 @@ async function main() {
 }
 
 if (require.main === module) {
+    // 注册全局未捕获异常和未处理 Promise 拒绝处理器，防止进程因连接超时等错误退出
+    process.on('uncaughtException', (err) => {
+        console.error('【系统全局未捕获异常】:', err);
+    });
+    process.on('unhandledRejection', (reason) => {
+        console.error('【系统全局未处理 Promise 拒绝】:', reason);
+    });
+
     main().catch((err) => {
         console.error(`${err.message || err}`);
         process.exit(1);

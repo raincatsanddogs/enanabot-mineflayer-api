@@ -205,6 +205,9 @@ class BotManager {
     }
 
     async _replace_bot(entry) {
+        if (entry.bot) {
+            this._cleanup_bot_instance(entry.bot);
+        }
         const bot = await this.create_bot(entry.login_options, this._build_runtime_context(entry.bot_id));
         entry.bot = bot;
         entry.context = bot.__enanabot_context || {};
@@ -375,6 +378,27 @@ class BotManager {
     }
 
     /**
+     * Clean up a bot instance by removing listeners, registering a dummy error handler,
+     * and quitting it if applicable.
+     * @param {object} bot - Bot instance.
+     * @private
+     */
+    _cleanup_bot_instance(bot) {
+        if (!bot) return;
+        try {
+            if (typeof bot.removeAllListeners === 'function') {
+                bot.removeAllListeners();
+                bot.on('error', () => {}); // Prevents late-emitted connection/socket errors from crashing the process
+            }
+            if (typeof bot.quit === 'function') {
+                bot.quit();
+            }
+        } catch (err) {
+            console.error('[BotManager] Error cleaning up bot instance:', err.message || err);
+        }
+    }
+
+    /**
      * Remove a bot entry and release listeners/timers owned by the manager.
      * @param {object} entry - Managed bot entry.
      * @param {object} [options] - Cleanup options.
@@ -389,6 +413,7 @@ class BotManager {
 
         if (entry.bot && typeof entry.bot.removeAllListeners === 'function') {
             entry.bot.removeAllListeners();
+            entry.bot.on('error', () => {}); // Prevents late-emitted connection/socket errors from crashing the process
         }
         if (quit) {
             this._safe_quit(entry.bot);
