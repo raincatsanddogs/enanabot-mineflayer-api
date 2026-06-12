@@ -318,10 +318,12 @@ function system_msg_handler(context, jsonMsg) {
         }
     }
 
-    // 未知 translate 消息 → system_info
+    // 未知 translate 消息 → system_info (如果是睡觉消息，则是 system)
     const translate = jsonMsg.translate || (jsonMsg.json && jsonMsg.json.translate) || null;
     if (position === 'system' && translate) {
-        position = 'system_info';
+        if (!translate.startsWith('sleep.')) {
+            position = 'system_info';
+        }
         const has_root_translate = typeof jsonMsg.translate === 'string';
         if (has_root_translate){
             message = ""
