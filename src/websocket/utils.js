@@ -307,6 +307,10 @@ function format_player(player) {
  * @returns {boolean} Whether the message sender is the bot.
  */
 function is_self_message(bot, msg) {
+    if (msg && msg.position === 'private_outgoing') {
+        return true;
+    }
+
     const bot_username = normalize_username(bot && bot.username);
     if (!bot_username || !msg || !msg.player) {
         return false;

@@ -118,6 +118,15 @@ function player_info_handler(context, jsonMsg) {
             _merge_player_result(players, resolved, name);
         }
         if (players.length > 0) return _finalize_player_result(players);
+
+        if (translate === 'multiplayer.player.joined' || translate === 'multiplayer.player.left') {
+            const fallback_name = _extract_visible_text(with_arr[0]).trim();
+            if (/^[A-Za-z0-9_]{1,16}$/.test(fallback_name)) {
+                const resolved = _resolve_player_info(context, fallback_name, null);
+                _merge_player_result(players, resolved, fallback_name);
+                if (players.length > 0) return _finalize_player_result(players);
+            }
+        }
     }
 
     // === 2. CMI 插件消息：格式化节点比对优先 ===
