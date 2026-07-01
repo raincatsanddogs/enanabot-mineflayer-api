@@ -413,6 +413,32 @@ function player_info_update_handler(context, player) {
     return info;
 }
 
+function _has_resolved_player_name(player) {
+    const players = Array.isArray(player) ? player : [player];
+    return players.some(p => p && typeof p.username === 'string' && p.username.trim() !== '');
+}
+
+function _debug_unresolved_player_system_message(bot, jsonMsg, parsed) {
+    const translate = jsonMsg && (jsonMsg.translate || (jsonMsg.json && jsonMsg.json.translate)) || null;
+    if (translate !== 'multiplayer.player.joined' && translate !== 'multiplayer.player.left') return;
+    if (_has_resolved_player_name(parsed && parsed.player)) return;
+
+    const bot_id = bot && bot.__enanabot_context && bot.__enanabot_context.bot_id;
+    try {
+        console.debug('[enanabot:message] unresolved player name in system message', {
+            bot_id,
+            translate,
+            raw_message: JSON.stringify(jsonMsg),
+        });
+    } catch (err) {
+        console.debug('[enanabot:message] unresolved player name in system message', {
+            bot_id,
+            translate,
+            raw_message: jsonMsg,
+        });
+    }
+}
+
 /**
  * Mineflayer plugin entry that installs an isolated parser for one bot.
  * @param {mineflayer.Bot} bot - Mineflayer bot instance.
@@ -422,6 +448,7 @@ module.exports = bot => {
 
     bot.on('message', (jsonMsg) => {
         const parsed = msg_handler(context, jsonMsg);
+        _debug_unresolved_player_system_message(bot, jsonMsg, parsed);
         parsed.bot_id = bot.__enanabot_context && bot.__enanabot_context.bot_id;
         bot.emit('msg_obj', parsed);
     });
