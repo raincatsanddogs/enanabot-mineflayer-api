@@ -20,6 +20,15 @@ const {
 const player_cache = require('../../utils/player_cache');
 const { get_bot_scope } = require('../../utils/bot_context');
 
+const INCOMING_WHISPER_TRANSLATES = new Set([
+    'commands.message.display.incoming',
+    '%s whispers to you: %s',
+]);
+const OUTGOING_WHISPER_TRANSLATES = new Set([
+    'commands.message.display.outgoing',
+    'You whisper to %s: %s',
+]);
+
 /**
  * Create isolated parser state for one bot instance.
  * @param {mineflayer.Bot} bot - Mineflayer bot instance.
@@ -193,10 +202,10 @@ function chat_msg_handler(context, jsonMsg) {
         if (translate === 'chat.type.text') {
             position = 'public';
             if (with_arr.length >= 2) message = _extract_visible_text(with_arr[1]).trim();
-        } else if (translate === 'commands.message.display.incoming') {
+        } else if (INCOMING_WHISPER_TRANSLATES.has(translate)) {
             position = 'private';
             if (with_arr.length >= 2) message = _extract_visible_text(with_arr[1]).trim();
-        } else if (translate === 'commands.message.display.outgoing') {
+        } else if (OUTGOING_WHISPER_TRANSLATES.has(translate)) {
             position = 'private_outgoing';
             if (with_arr.length >= 2) message = _extract_visible_text(with_arr[1]).trim();
         } else if (translate === 'multiplayer.player.joined' || translate === 'multiplayer.player.left') {
@@ -363,8 +372,8 @@ function msg_handler(context, jsonMsg) {
     // === 1. 有 translate 的消息 ===
     if (translate) {
         if (translate === 'chat.type.text' ||
-            translate === 'commands.message.display.incoming' ||
-            translate === 'commands.message.display.outgoing' ||
+            INCOMING_WHISPER_TRANSLATES.has(translate) ||
+            OUTGOING_WHISPER_TRANSLATES.has(translate) ||
             translate === 'multiplayer.player.joined' ||
             translate === 'multiplayer.player.left' ||
             translate.startsWith('death.') ||
